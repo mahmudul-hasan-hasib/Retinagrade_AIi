@@ -1,0 +1,44 @@
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Secrets & env ---
+.env
+
+# --- IDE ---
+.idea/
+.vscode/
+
+# --- Model weights (large binaries) ---
+*.pt
+*.pth
+*.onnx
+backend/models/*
+!backend/models/.gitkeep
+
+# --- Flutter (frontend project not created yet) ---
+frontend/.dart_tool/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/.packages
+frontend/build/
+frontend/coverage/
+frontend/**/android/local.properties
+frontend/**/ios/Pods/
+frontend/**/macos/Pods/
+frontend/pubspec.lock
+
+# --- OS ---
+Thumbs.db
+.DS_Store
+
+# --- Uploads / generated reports ---
+uploads/
+reports/

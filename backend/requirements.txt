@@ -1,0 +1,30 @@
+# RetinaGrade AI - backend requirements (CPU only, no CUDA)
+# Target: Python 3.10 / Windows. GPU packages are intentionally not used.
+#
+# Install (from the backend/ directory):
+#   .venv\Scripts\python.exe -m pip install -r requirements.txt
+#
+# The extra index below serves the official CPU-only PyTorch wheels so that
+# the +cpu builds are resolved instead of the CUDA-enabled default wheels.
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# --- ML / inference (CPU-only builds) ---
+torch==2.14.0+cpu
+torchvision==0.29.0+cpu
+
+# --- Web layer ---
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
+python-multipart==0.0.32
+python-dotenv==1.2.3
+
+# --- Imaging / preprocessing ---
+numpy==2.2.6
+pillow==12.3.0
+opencv-python==5.0.0.93
+
+# --- Added later (not installed) ---
+# google-genai          # optional Gemini report generation
+# reportlab             # PDF report export
+# pytest, httpx         # test suite
