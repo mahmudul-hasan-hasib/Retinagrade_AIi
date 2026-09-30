@@ -41,7 +41,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.serialization import safe_globals
-from torchvision.models import efficientnet_b0
 
 from .exceptions import (
     ArchitectureMismatchError,
@@ -49,6 +48,15 @@ from .exceptions import (
     InferenceError,
     ModelNotFoundError,
     UnsupportedModalityError,
+)
+from .model_architecture import (  # single source of truth for the architecture
+    BACKBONE_CHANNELS,
+    INPUT_CHANNELS,
+    NUM_BINARY_HEADS,
+    NUM_CLASSES,
+    CfpEfficientNetB0,
+    create_cfp_model,
+    create_uwf_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,10 +69,9 @@ UWF_CHECKPOINT = MODELS_DIR / "EfficientNetB0_UWF_final.pt"
 
 CPU_DEVICE = torch.device("cpu")
 
-NUM_CLASSES = 5
-NUM_LESION_HEADS = 7
-BACKBONE_CHANNELS = 1280
-INPUT_CHANNELS = 3
+# Architecture constants are owned by ``model_architecture`` and re-exported
+# here for the existing callers of this module.
+NUM_LESION_HEADS = NUM_BINARY_HEADS
 ARCHITECTURE_NAME = "EfficientNet-B0"
 
 MODALITY_CFP = "cfp"
@@ -93,37 +100,12 @@ _SAFE_GLOBALS = [
 _STATE_DICT_KEYS = ("model_state_dict", "state_dict", "model", "net", "weights")
 
 
-class MultiTaskEfficientNetB0(nn.Module):
-    """EfficientNet-B0 trunk with a 5-class DR head and 7 binary heads.
+class MultiTaskEfficientNetB0(CfpEfficientNetB0):
+    """Backwards-compatible alias for :class:`CfpEfficientNetB0`.
 
-    Reconstruction is derived from the checkpoint's ``state_dict`` keys and
-    tensor shapes:
-
-    ``features.0.0.weight (32, 3, 3, 3)``   -> 3-channel RGB input
-    ``features.8.0.weight (1280, 320, 1, 1)`` -> 1280-d pooled features
-    ``dr_head.weight (5, 1280)``            -> 5 DR classes
-    ``lesion_heads.N.weight (1, 1280)``     -> 7 binary auxiliary heads
-
-    The checkpoint does not store the ordering/meaning of the 7 auxiliary
-    heads, so they are exposed as raw unnamed outputs only and are never
-    presented as clinical findings.
+    The architecture itself now lives in ``model_architecture.py`` so that it
+    is defined exactly once and can be verified on its own.
     """
-
-    def __init__(self, num_classes: int = NUM_CLASSES, num_binary_heads: int = NUM_LESION_HEADS) -> None:
-        super().__init__()
-        backbone = efficientnet_b0(weights=None)
-        self.features = backbone.features
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.dr_head = nn.Linear(BACKBONE_CHANNELS, num_classes)
-        self.lesion_heads = nn.ModuleList(
-            [nn.Linear(BACKBONE_CHANNELS, 1) for _ in range(num_binary_heads)]
-        )
-
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        pooled = torch.flatten(self.avgpool(self.features(x)), 1)
-        dr_logits = self.dr_head(pooled)
-        binary_logits = torch.cat([head(pooled) for head in self.lesion_heads], dim=1)
-        return dr_logits, binary_logits
 
 
 @dataclass(frozen=True)
@@ -265,11 +247,14 @@ def detect_head_layout(state_dict: Dict[str, torch.Tensor], path: Path) -> str:
 
 
 def build_model(head_layout: str, num_classes: int, num_binary_heads: int) -> nn.Module:
-    """Instantiate the architecture without downloading any pretrained weights."""
+    """Instantiate the architecture without downloading any pretrained weights.
+
+    Delegates to ``model_architecture``, which owns the construction.
+    """
     if head_layout == MULTI_HEAD:
-        return MultiTaskEfficientNetB0(num_classes=num_classes, num_binary_heads=num_binary_heads)
+        return create_cfp_model(num_classes=num_classes, num_binary_heads=num_binary_heads)
     if head_layout == SINGLE_HEAD:
-        return efficientnet_b0(weights=None, num_classes=num_classes)
+        return create_uwf_model(num_classes=num_classes)
     raise ArchitectureMismatchError(f"Unknown head layout: {head_layout!r}")
 
 
