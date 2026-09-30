@@ -1,7 +1,8 @@
-"""Model loading for RetinaGrade AI (CPU only).
+"""Load the real RetinaGrade AI checkpoints onto the CPU.
 
-Architecture of both checkpoints was determined by inspecting the real
-checkpoint files (see ``inference/inspect_models.py``):
+The architecture is defined once, in ``inference/model_architecture.py``, from
+evidence read out of the checkpoint files themselves (see
+``inference/inspect_models.py`` and ``inference/verify_architecture.py``):
 
 * ``EfficientNetB0_CFP_final.pth``  -> checkpoint dict with key
   ``model_state_dict`` holding a **multi-head** network:
@@ -15,18 +16,31 @@ checkpoint files (see ``inference/inspect_models.py``):
   ``model_state_dict`` holding a **single-head** network, i.e. exactly
   ``torchvision.models.efficientnet_b0(num_classes=5)``:
 
-  - ``features.*``          same EfficientNet-B0 trunk
+  - ``features.*``          the same EfficientNet-B0 trunk
   - ``classifier.1``        ``nn.Linear(1280, 5)``      -> DR grade, 5 classes
 
-Both load into the architectures below with ``strict=True`` and report zero
-missing / unexpected keys, which proves the reconstruction is exact.
-No weights are downloaded (``weights=None``); the checkpoints are the only
-source of parameters.
+Loading is deliberately unforgiving. For every checkpoint:
 
-The model was trained with PyTorch ``2.10.0+cu128`` / ``torchvision
+1. ``torch.load(..., map_location="cpu", weights_only=True)`` - never unsafe
+   unpickling, and never a CUDA device.
+2. the tensor mapping is taken from ``model_state_dict``.
+3. the architecture is built with ``weights=None``; no pretrained weights are
+   ever downloaded, so the checkpoint is the only source of parameters.
+4. ``model.load_state_dict(state_dict, strict=True)``. ``strict=False`` is never
+   used anywhere in this project: a partial load would leave randomly
+   initialised weights inside the network and produce confident nonsense.
+   If the strict load fails, loading aborts and the original error is reported
+   verbatim. The architecture is never adjusted to force a load.
+5. ``model.to(torch.device("cpu"))`` followed by ``model.eval()``, then every
+   parameter *and* buffer is asserted to be on the CPU.
+6. one zero-filled CPU probe confirms the real output dimensions. This is a
+   structural shape check, not prediction: no image is read and no result is
+   interpreted.
+
+The models were trained with PyTorch ``2.10.0+cu128`` / ``torchvision
 0.25.0+cu128`` on CUDA. Those CUDA builds are **not** required and are not
-installed here: inference runs on ``torch.device("cpu")`` with a CPU-only
-PyTorch build.
+installed here: everything in this module runs on ``torch.device("cpu")`` with a
+CPU-only PyTorch build.
 """
 
 from __future__ import annotations
@@ -83,9 +97,10 @@ SINGLE_HEAD = "single_head"
 
 # Globals allow-listed inside ``torch.load(weights_only=True)``. The real
 # checkpoints store NumPy scalars (``best_val_qwk``) and a ``TorchVersion``
-# string; everything else is a plain tensor. Unsafe unpickling is never used.
+# string; everything else in the file is a plain tensor. Unsafe unpickling is never used.
+# ``np._core`` is reached via getattr because NumPy moved that namespace in 2.x.
 _SAFE_GLOBALS = [
-    np._core.multiarray.scalar,
+    getattr(np, "_core", np).multiarray.scalar,
     np.dtype,
     np.ndarray,
     np.dtypes.Float32DType,
@@ -143,6 +158,7 @@ class LoadedModel:
     num_classes: int
     num_binary_heads: int
     metadata: Dict[str, Any] = field(default_factory=dict)
+    load_report: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def modality(self) -> str:
@@ -155,6 +171,28 @@ class LoadedModel:
     @property
     def device(self) -> torch.device:
         return next(self.model.parameters()).device
+
+    @property
+    def num_parameters(self) -> int:
+        return sum(p.numel() for p in self.model.parameters())
+
+    @property
+    def is_eval(self) -> bool:
+        return not self.model.training
+
+    @property
+    def all_tensors_on_cpu(self) -> bool:
+        return all(t.device.type == "cpu" for t, _ in _named_tensors_on_device(self.model))
+
+    @property
+    def strict_load_succeeded(self) -> bool:
+        """True only if ``load_state_dict(strict=True)`` completed with no diff."""
+        report = self.load_report
+        return bool(
+            report.get("strict")
+            and not report.get("missing_keys")
+            and not report.get("unexpected_keys")
+        )
 
     def dr_logits(self, tensor: torch.Tensor) -> torch.Tensor:
         """Return DR grade logits ``(N, num_classes)`` for a CPU tensor."""
@@ -182,7 +220,10 @@ class LoadedModel:
             "num_classes": self.num_classes,
             "num_binary_heads": self.num_binary_heads,
             "device": str(self.device),
-            "eval_mode": not self.model.training,
+            "eval_mode": self.is_eval,
+            "strict_load_succeeded": self.strict_load_succeeded,
+            "num_parameters": self.num_parameters,
+            "load_report": self.load_report,
             "checkpoint_metadata": self.metadata,
         }
 
@@ -350,6 +391,18 @@ def _as_plain(value: Any) -> Any:
     return str(value)
 
 
+def _named_tensors_on_device(model: nn.Module):
+    """Yield ``(tensor, kind)`` for every parameter *and* buffer in ``model``.
+
+    BatchNorm keeps its ``running_mean`` / ``running_var`` as buffers, so checking
+    ``parameters()`` alone would leave half the loaded tensors unverified.
+    """
+    for name, parameter in model.named_parameters():
+        yield parameter, f"parameter '{name}'"
+    for name, buffer in model.named_buffers():
+        yield buffer, f"buffer '{name}'"
+
+
 def load_model(spec: ModelSpec) -> LoadedModel:
     """Load, validate and evaluate one checkpoint on the CPU."""
     if not spec.checkpoint.is_file():
@@ -372,25 +425,37 @@ def load_model(spec: ModelSpec) -> LoadedModel:
     _validate_state_dict_shapes(state_dict, spec, num_classes, num_binary_heads)
 
     model = build_model(head_layout, num_classes, num_binary_heads)
+    # strict=True is mandatory and never relaxed. A partial load would silently
+    # leave randomly initialised weights in the model and produce confident
+    # nonsense, so any mismatch is fatal and the original error is re-raised
+    # verbatim (chained via `from exc`, so the real traceback is preserved).
     try:
         result = model.load_state_dict(state_dict, strict=True)
     except Exception as exc:  # noqa: BLE001
         raise ArchitectureMismatchError(
-            f"State dict of '{spec.checkpoint.name}' does not match "
-            f"{ARCHITECTURE_NAME}/{head_layout}: {type(exc).__name__}: {exc}"
+            f"strict=True load_state_dict FAILED for '{spec.checkpoint.name}'. "
+            f"The checkpoint does not match {ARCHITECTURE_NAME}/{head_layout}. "
+            f"Do NOT switch to strict=False and do NOT change the architecture. "
+            f"Exact error - {type(exc).__name__}: {exc}"
         ) from exc
     if result.missing_keys or result.unexpected_keys:
         raise ArchitectureMismatchError(
-            f"State dict of '{spec.checkpoint.name}' mismatch - "
-            f"missing: {list(result.missing_keys)}, unexpected: {list(result.unexpected_keys)}"
+            f"strict=True load_state_dict reported a mismatch for "
+            f"'{spec.checkpoint.name}' - missing: {list(result.missing_keys)}, "
+            f"unexpected: {list(result.unexpected_keys)}"
         )
 
+    # Explicit CPU placement. map_location="cpu" already deserialised onto the
+    # CPU; this makes the placement intentional and is asserted below.
     model.to(CPU_DEVICE)
     model.eval()
-    for parameter in model.parameters():
-        if parameter.device.type != "cpu":  # pragma: no cover - defensive
+
+    for tensor, kind in _named_tensors_on_device(model):
+        if tensor.device.type != "cpu":  # pragma: no cover - defensive
             raise ArchitectureMismatchError(
-                f"Parameter '{parameter.shape}' did not move to CPU (on {parameter.device})."
+                f"{kind.capitalize()} '{tuple(tensor.shape)}' of "
+                f"'{spec.checkpoint.name}' is on {tensor.device}, not cpu. "
+                f"CUDA must never be used in this project."
             )
 
     _validate_forward(model, spec, num_classes, num_binary_heads)
@@ -401,6 +466,19 @@ def load_model(spec: ModelSpec) -> LoadedModel:
         num_classes=num_classes,
         num_binary_heads=num_binary_heads,
         metadata=_extract_metadata(checkpoint, spec),
+        load_report={
+            "strict": True,
+            "source_key": "model_state_dict"
+            if "model_state_dict" in checkpoint
+            else "state_dict (alternate key)",
+            "checkpoint_tensors": len(state_dict),
+            "loaded_tensors": len(model.state_dict()),
+            "missing_keys": list(result.missing_keys),
+            "unexpected_keys": list(result.unexpected_keys),
+            "head_layout": head_layout,
+            "device": str(CPU_DEVICE),
+            "eval_mode": not model.training,
+        },
     )
     logger.info(
         "Loaded %s model from %s (%s, %d classes, %d params)",
@@ -555,13 +633,15 @@ manager = ModelManager()
 __all__ = [
     "ARCHITECTURE_NAME",
     "CPU_DEVICE",
+    "LoadedModel",
     "MODEL_SPECS",
     "ModelManager",
     "ModelSpec",
     "MultiTaskEfficientNetB0",
-    "LoadedModel",
     "SUPPORTED_MODALITIES",
+    "build_model",
     "detect_head_layout",
+    "extract_state_dict",
     "load_model",
     "manager",
     "safe_load_checkpoint",
