@@ -24,14 +24,31 @@ from .model_loader import (
 )
 from .preprocessing import PreprocessConfig, get_config, preprocess_image
 
-#: DR class mapping. Both checkpoints are verified to have exactly 5 DR
-#: outputs (CFP ``dr_head (5, 1280)``, UWF ``classifier.1 (5, 1280)``).
+#: DR class mapping, fixed by the ICDR 5-grade scale. Both checkpoints are
+#: verified to emit exactly 5 DR logits, so this mapping is exhaustive:
+#:
+#: ==========  ==================  =============================================
+#: ``index``   ``key`` / ``label``  Meaning
+#: ==========  ==================  =============================================
+#: 0           ``No DR``           no apparent diabetic retinopathy
+#: 1           ``Mild``            mild non-proliferative DR
+#: 2           ``Moderate``        moderate non-proliferative DR
+#: 3           ``Severe``          severe non-proliferative DR
+#: 4           ``Proliferative DR`` proliferative DR
+#: ==========  ==================  =============================================
+#:
+#: ``key`` and ``label`` are deliberately the *same* string so that
+#: ``result.label == result.probabilities`` keys always line up and no
+#: renaming step can drift away from the class index.
+#:
+#: The order is the logit order produced by ``dr_head`` (CFP) and
+#: ``classifier.1`` (UWF), both verified as ``(5, 1280)`` in the real files.
 DR_CLASSES = (
     {"index": 0, "key": "No DR", "label": "No DR", "description": "No apparent diabetic retinopathy"},
     {"index": 1, "key": "Mild", "label": "Mild", "description": "Mild non-proliferative DR"},
     {"index": 2, "key": "Moderate", "label": "Moderate", "description": "Moderate non-proliferative DR"},
     {"index": 3, "key": "Severe", "label": "Severe", "description": "Severe non-proliferative DR"},
-    {"index": 4, "key": "Proliferative", "label": "Proliferative", "description": "Proliferative DR"},
+    {"index": 4, "key": "Proliferative DR", "label": "Proliferative DR", "description": "Proliferative diabetic retinopathy"},
 )
 
 PROBABILITY_KEYS = tuple(c["key"] for c in DR_CLASSES)
@@ -57,14 +74,21 @@ class PredictionResult:
     auxiliary_raw_outputs: Optional[Dict[str, float]] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        """Return the prediction payload.
+
+        The first six keys are the required output contract, in the required
+        order. ``description``, ``image_size``, ``device``, ``checkpoint`` and
+        ``preprocessing`` are additional provenance fields; ``device`` is always
+        ``"cpu"`` because nothing in this project may touch CUDA.
+        """
         payload: Dict[str, Any] = {
             "modality": self.modality,
             "model": self.model,
             "predicted_class": self.predicted_class,
             "label": self.label,
-            "description": self.description,
             "confidence": self.confidence,
             "probabilities": self.probabilities,
+            "description": self.description,
             "image_size": self.image_size,
             "device": self.device,
             "checkpoint": self.checkpoint,
