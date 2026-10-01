@@ -48,5 +48,10 @@ Thumbs.db
 .DS_Store
 
 # --- Uploads / generated reports ---
+# Anchored to the repository root. An unanchored "reports/" matches at any depth
+# and was silently excluding frontend/src/components/reports/, which is source
+# code (AiReportCard.tsx) and must be tracked. Note that git cannot re-include a
+# file whose parent directory is excluded, so a "!frontend/..." negation here
+# would not work; the leading slash is the fix.
 uploads/
-reports/
+/reports/
