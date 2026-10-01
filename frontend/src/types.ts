@@ -6,7 +6,8 @@
  * UI is already aligned with the order the network will emit.
  *
  * NOTE: no inference, Grad-CAM or report value exists yet. Every result field
- * in this app is `null` and is rendered as a placeholder.
+ * in this app is `null` and is rendered as a placeholder. The only live data is
+ * the `/predict` response shown on the analyze page.
  */
 
 export type ModalityKey = 'cfp' | 'uwf'
@@ -36,7 +37,25 @@ export interface DrClass {
   severity: 'none' | 'mild' | 'moderate' | 'severe' | 'proliferative'
 }
 
-export type PredictionStatus = 'idle' | 'analyzed'
+export type PredictionStatus = 'idle' | 'analyzing' | 'analyzed' | 'error'
+
+/**
+ * Body returned by `POST /predict`.
+ *
+ * The backend currently validates the upload only, so these three fields are
+ * the whole payload. They are mirrored from
+ * `backend/schemas/api.py::PredictDevResponse` and every field is optional here
+ * so an unexpected server response renders instead of crashing the page.
+ */
+export interface PredictApiResponse {
+  success?: boolean
+  message?: string
+  modality?: string
+  error?: {
+    code?: string
+    message?: string
+  }
+}
 
 /**
  * A single analysis row. `label` / `confidence` / `probabilities` are

@@ -17,8 +17,8 @@ const ACCEPT_ATTRIBUTE = ACCEPTED_IMAGE_TYPES.join(',')
 /**
  * Drag-and-drop / click-to-browse upload area.
  *
- * Fully local: the selected file is handed to the parent for a preview only.
- * No request is made to the backend from this component.
+ * Selection is local: the file is handed to the parent for a preview and only
+ * leaves the browser when "Analyze Image" triggers the `/predict` request.
  */
 export function ImageDropzone({
   file,

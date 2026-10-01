@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { predictImage } from './api/client'
 import { AppShell } from './components/layout/AppShell'
 import { useImageSelection } from './hooks/useImageSelection'
 import { AnalyzePage } from './pages/AnalyzePage'
@@ -6,7 +7,12 @@ import { DashboardPage } from './pages/DashboardPage'
 import { ExplainabilityPage } from './pages/ExplainabilityPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { UnavailablePage } from './pages/UnavailablePage'
-import type { ModalityKey, NavItemId, PredictionStatus } from './types'
+import type {
+  ModalityKey,
+  NavItemId,
+  PredictApiResponse,
+  PredictionStatus,
+} from './types'
 
 const PAGE_META: Record<NavItemId, { title: string; subtitle: string }> = {
   dashboard: {
@@ -42,17 +48,26 @@ const PAGE_META: Record<NavItemId, { title: string; subtitle: string }> = {
  * `AnalyzePage` so that switching to Explainability or AI Reports keeps the
  * same capture on screen instead of resetting the workspace.
  *
- * Nothing in this tree performs inference or contacts the API: `status` only
- * controls which placeholder panels are revealed.
+ * "Analyze Image" is the only place that talks to the API: it POSTs the capture
+ * and the modality to `/predict` and stores the response verbatim. No grade,
+ * confidence or probability is computed anywhere in this tree.
  */
 export default function App() {
   const [activeItem, setActiveItem] = useState<NavItemId>('analyze')
   const [modality, setModality] = useState<ModalityKey>('cfp')
   const [status, setStatus] = useState<PredictionStatus>('idle')
+  const [response, setResponse] = useState<PredictApiResponse | null>(null)
+  const [httpStatus, setHttpStatus] = useState<number | null>(null)
+  const [requestError, setRequestError] = useState<string | null>(null)
   const image = useImageSelection()
 
   // Any change to the inputs invalidates the result panels.
-  const resetResults = useCallback(() => setStatus('idle'), [])
+  const resetResults = useCallback(() => {
+    setStatus('idle')
+    setResponse(null)
+    setHttpStatus(null)
+    setRequestError(null)
+  }, [])
 
   const handleModalityChange = useCallback(
     (next: ModalityKey) => {
@@ -70,9 +85,37 @@ export default function App() {
     [image, resetResults],
   )
 
-  const handleAnalyze = useCallback(() => {
-    setStatus('analyzed')
-  }, [])
+  const handleClearImage = useCallback(() => {
+    image.clear()
+    resetResults()
+  }, [image, resetResults])
+
+  const handleAnalyze = useCallback(async () => {
+    const file = image.file
+    if (!file) {
+      return
+    }
+
+    setStatus('analyzing')
+    setResponse(null)
+    setHttpStatus(null)
+    setRequestError(null)
+
+    try {
+      const result = await predictImage(file, modality)
+      setHttpStatus(result.httpStatus)
+      setResponse(result.data)
+      setStatus('analyzed')
+    } catch (error) {
+      const failed = error as { httpStatus?: number; message?: string }
+      setHttpStatus(failed.httpStatus ?? null)
+      setResponse(null)
+      setRequestError(
+        failed.message ?? 'The request to the backend failed for an unknown reason.',
+      )
+      setStatus('error')
+    }
+  }, [image.file, modality])
 
   const meta = PAGE_META[activeItem]
 
@@ -91,8 +134,11 @@ export default function App() {
           previewUrl={image.previewUrl}
           uploadError={image.error}
           onSelectImage={handleSelectImage}
-          onClearImage={image.clear}
+          onClearImage={handleClearImage}
           status={status}
+          response={response}
+          httpStatus={httpStatus}
+          requestError={requestError}
           onAnalyze={handleAnalyze}
         />
       ) : null}

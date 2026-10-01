@@ -1,690 +1,919 @@
 # RetinaGrade AI — Project Progress Report
 
 **Report date:** 1 October 2026
-**Repository:** `F:\retinagrade-ai` (Git, 6 commits, HEAD = `a529878 "prepar for prediction"`)
-**Environment:** Windows, `backend\.venv` = CPython 3.10.11
-**Basis of this report:** direct inspection of the repository plus live execution of the existing verification scripts on the current machine. Every quantitative statement below is either quoted from a file in the repository or was produced by a command listed in Appendix A. Nothing is estimated, projected or carried over from an unverified claim.
+**Repository:** `F:\retinagrade-ai`
+**Git:** 7 commits, HEAD = `b093fde "add frontend"`, working tree clean
+**Environment:** Windows, `backend\.venv` = CPython 3.10.11, torch 2.14.0+cpu
+**Basis of this report:** direct inspection of the repository on disk, plus live execution of the four verification scripts that ship with the project and a live HTTP probe of the running FastAPI service. Every number below was either read out of a file in the repository or produced by a command listed in **Appendix A**. No result in this report is estimated, extrapolated, or carried over from an earlier claim.
 
 ---
 
-## 1. Project Overview
+## Evidence legend
 
-RetinaGrade AI is a diabetic-retinopathy (DR) screening application built around two pretrained retinal-imaging models that are supplied as checkpoint files rather than trained inside this repository. The system is designed around two imaging modalities:
-
-| Modality | Full name | Capture |
-|---|---|---|
-| **CFP** | Colour Fundus Photography | Centred circular view of the posterior pole |
-| **UWF** | Ultra-Wide Field | Wide single capture covering the retina including the periphery |
-
-Both models are **torchvision EfficientNet-B0** networks that output a **5-class DR grade** on the ICDR scale (`No DR`, `Mild`, `Moderate`, `Severe`, `Proliferative DR`), as defined in `backend/inference/predictor.py:46` and mirrored in the frontend at `frontend/src/data/clinical.ts:42`.
-
-**Architectural intent (documented, not yet delivered end-to-end):** upload a retinal capture → server-side CPU inference → DR grade, confidence and per-class probabilities → Grad-CAM explainability overlay → optional Gemini-generated short report → screening history with PDF export.
-
-**Current stage in one sentence:** the model layer is finished and verified (architecture reconstructed, both checkpoints loading strictly onto the CPU), while the API and the web client are deliberately non-functional placeholders that never execute a network.
-
-**Scope boundary:** the repository contains model *consumption* code only. There is no training code, no dataset pipeline and no evaluation harness in this repository (see §4 and §12).
+| Marker | Meaning |
+|---|---|
+| ✅ **VERIFIED** | Reproduced in this session by a command in Appendix A |
+| ⚠️ **ASSUMED** | Not stated by any checkpoint; a documented default, flagged in code as unverified |
+| ❌ **NOT IMPLEMENTED** | No code in the repository performs this |
+| 📄 **DOCUMENTED ONLY** | Described in a comment/README/schema but no executable path exists |
 
 ---
 
-## 2. Current Project Structure
+## 1. Project structure
 
 ```
 retinagrade-ai/
-├── README.md                      (2,412 B — partly outdated, see §11)
-├── .gitignore                     (VCS, venv, *.pt/*.pth, secrets; no node_modules rule)
-├── RETINAGRADE_AI_PROGRESS_REPORT.md
+├── README.md                              2,412 B  (partly stale — see §12.9)
+├── .gitignore
+├── RETINAGRADE_AI_PROGRESS_REPORT.md      this file
 │
-├── backend/                       FastAPI service, CPU-only
-│   ├── .venv/                     CPython 3.10.11 virtualenv (not tracked)
-│   ├── .env                       APP_ENV/HOST/PORT + empty GEMINI_API_KEY
+├── backend/                               FastAPI service, CPU-only
+│   ├── .venv/                             CPython 3.10.11 virtualenv (untracked)
+│   ├── .env                               APP_ENV / API_HOST / API_PORT / GEMINI_API_KEY (untracked)
 │   ├── .gitignore
-│   ├── requirements.txt           pinned CPU-only wheels
-│   ├── main.py                    206 lines — API skeleton, 3 endpoints
-│   ├── test_models.py             CLI checkpoint verification
-│   ├── test_prediction.py         CLI real-image inference test
+│   ├── requirements.txt                   30 lines, pinned CPU-only wheels
+│   ├── main.py                            206 lines — API skeleton, 3 endpoints
+│   ├── test_models.py                     164 lines — CLI checkpoint verification
+│   ├── test_prediction.py                 305 lines — CLI real-image inference test
 │   ├── models/
-│   │   ├── .gitkeep               (checkpoints are git-ignored)
-│   │   ├── EfficientNetB0_CFP_final.pth   16,408,231 B
-│   │   └── EfficientNetB0_UWF_final.pt    48,652,882 B
-│   ├── inference/                 ← the completed part of the project
-│   │   ├── __init__.py            (empty)
-│   │   ├── inspect_models.py      20,146 B  read-only checkpoint inspection
-│   │   ├── model_architecture.py  10,574 B  evidence-based architecture definition
-│   │   ├── verify_architecture.py 15,125 B  architecture ↔ checkpoint comparison
-│   │   ├── model_loader.py        25,187 B  strict CPU weight loading
-│   │   ├── test_model_loading.py  12,757 B  weight-loading verification CLI
-│   │   ├── preprocessing.py       12,423 B  decode → resize → normalise
-│   │   ├── predictor.py            7,590 B  DR grading (not called by the API)
-│   │   └── exceptions.py           1,391 B  domain errors → HTTP mapping
+│   │   ├── .gitkeep                       (checkpoints are git-ignored)
+│   │   ├── EfficientNetB0_CFP_final.pth   16,408,231 B  (untracked)
+│   │   └── EfficientNetB0_UWF_final.pt    48,652,882 B  (untracked)
+│   ├── inference/                         ← the completed part of the project
+│   │   ├── __init__.py                    0 B
+│   │   ├── exceptions.py                  1,391 B   domain errors
+│   │   ├── inspect_models.py              20,146 B  read-only checkpoint inspection
+│   │   ├── model_architecture.py          10,574 B  evidence-based architecture definition
+│   │   ├── verify_architecture.py         15,125 B  architecture ↔ checkpoint comparison
+│   │   ├── model_loader.py                25,187 B  strict CPU weight loading + ModelManager
+│   │   ├── test_model_loading.py          12,757 B  weight-loading verification CLI
+│   │   ├── preprocessing.py               12,423 B  decode → resize → normalise
+│   │   └── predictor.py                    7,590 B  DR grading (NOT called by the API)
 │   ├── schemas/
-│   │   ├── __init__.py
-│   │   └── api.py                 52 lines — 4 Pydantic schemas
-│   ├── services/__init__.py       EMPTY (placeholder for Gemini / history / PDF)
-│   └── utils/__init__.py          EMPTY (placeholder)
+│   │   ├── __init__.py                    0 B
+│   │   └── api.py                         52 lines — 5 Pydantic schemas
+│   ├── services/__init__.py               0 B — EMPTY placeholder
+│   ├── utils/__init__.py                  0 B — EMPTY placeholder
+│   └── test_images/
+│       ├── cfp/tr000001.jpg               657,724 B — 2077×2077 RGB JPEG
+│       └── uwf/tr000001.jpg               451,362 B — 2600×2048 RGB JPEG
 │
-├── frontend/                      React + TypeScript + Vite + Tailwind SPA
-│   ├── package.json / package-lock.json / vite.config.ts
-│   ├── tsconfig.json / tsconfig.app.json / tsconfig.node.json
+├── frontend/                              React 19 + TypeScript + Vite + Tailwind SPA
+│   ├── package.json / package-lock.json   33 lines / 115,492 B
+│   ├── vite.config.ts                     12 lines
+│   ├── tsconfig.json / .app.json / .node.json
 │   ├── eslint.config.js / index.html / public/retina.svg
-│   ├── dist/                      prior production build (untracked)
-│   │   ├── index.html (962 B)
-│   │   ├── retina.svg (378 B)
-│   │   ├── assets/index-D3fiBzDM.js  (268,520 B)
-│   │   └── assets/index-DWvLyAx9.css (35,183 B)
-│   └── src/                       32 files (25 .ts/.tsx + 1 .css)
-│       ├── App.tsx, main.tsx, types.ts, index.css
-│       ├── pages/                 AnalyzePage, DashboardPage,
-│       │                          ExplainabilityPage, ReportsPage, UnavailablePage
+│   ├── dist/                              4 files, prior production build
+│   └── src/                               32 files (31 .ts/.tsx + 1 .css)
+│       ├── App.tsx  main.tsx  types.ts  index.css
+│       ├── pages/            AnalyzePage, DashboardPage, ExplainabilityPage,
+│       │                     ReportsPage, UnavailablePage
 │       ├── components/
-│       │   ├── analyze/           ImageDropzone, ImagePreview, ModalitySelector
-│       │   ├── layout/            AppShell, Brand, SidebarContent, SidebarNav, TopBar
-│       │   ├── results/           PredictionCard, ProbabilityCard, ProbabilityBars
-│       │   ├── reports/           AiReportCard
-│       │   ├── xai/               XaiPanel
-│       │   ├── ui/                Badge, Button, Card, EmptyState, Feedback, Placeholder
-│       │   └── icons/index.tsx
-│       ├── data/clinical.ts       modality + DR-class definitions
+│       │   ├── analyze/      ImageDropzone, ImagePreview, ModalitySelector
+│       │   ├── layout/       AppShell, Brand, SidebarContent, SidebarNav, TopBar
+│       │   ├── results/      PredictionCard, ProbabilityCard, ProbabilityBars
+│       │   ├── xai/          XaiPanel
+│       │   ├── reports/      AiReportCard
+│       │   ├── ui/           Badge, Button, Card, EmptyState, Feedback, Placeholder
+│       │   └── icons/        index.tsx
+│       ├── data/clinical.ts
 │       ├── hooks/useImageSelection.ts
 │       └── lib/format.ts
 │
-├── tests/                         EMPTY (.gitkeep only) — no automated suite
-└── docs/                          EMPTY (.gitkeep only)
+├── tests/.gitkeep                         0 B — EMPTY (no automated test suite)
+└── docs/.gitkeep                          0 B — EMPTY
 ```
 
-**Version-control state (verified with `git status` / `git ls-files`):**
+**Notable structural facts**
 
-- 24 tracked files; all tracked content is backend + top-level files.
-- **The entire `frontend/` application is untracked** (`src/`, configs, `package.json`, `package-lock.json`, `index.html`, `public/`, `dist/`). It exists on disk but is not in Git.
-- `backend/main.py` and `backend/schemas/api.py` carry **uncommitted modifications**. Inspecting that diff shows it *removes* an inference-wired API (`0.2.0`, with `GET /models`, a lifespan model preload, an `InferenceError` handler and a real `POST /predict` calling `predictor.predict`) and replaces it with the current `0.3.0-dev` validation-only skeleton. The working tree is the skeleton described throughout this report; the removed code exists only in commit `759dc60` and is not part of the current source of truth.
-- `frontend/node_modules/` and `frontend/dist/` are untracked **and not covered by `.gitignore`** (hygiene gap).
-
----
-
-## 3. Technology Stack
-
-### 3.1 Backend — pinned in `backend/requirements.txt`, verified installed
-
-| Component | Pinned | Installed & verified |
-|---|---|---|
-| Python | 3.10 / 3.11 | **3.10.11** |
-| PyTorch | `torch==2.14.0+cpu` | **2.14.0+cpu** |
-| TorchVision | `torchvision==0.29.0+cpu` | **0.29.0+cpu** |
-| FastAPI | `fastapi==0.141.1` | **0.141.1** |
-| Uvicorn | `uvicorn[standard]==0.54.0` | **0.54.0** |
-| Starlette | (transitive) | 1.7.0 |
-| Pydantic | (transitive) | 2.13.5 |
-| python-multipart | `0.0.32` | **0.0.32** |
-| python-dotenv | `1.2.3` | **1.2.3** |
-| NumPy | `2.2.6` | **2.2.6** |
-| Pillow | `12.3.0` | **12.3.0** |
-| OpenCV | `opencv-python==5.0.0.93` | **5.0.0.93** |
-
-Notes verified during inspection:
-
-- `requirements.txt:10` adds `--extra-index-url https://download.pytorch.org/whl/cpu` so the `+cpu` builds are resolved instead of the CUDA defaults. This is the mechanism that makes CPU-only operation real rather than aspirational.
-- **`timm` is not installed and is not required.** `verify_architecture.py` prints "timm not installed (and not required)"; the trunk was identified as torchvision's from the checkpoint keys themselves (`model_architecture.py:34-40`).
-- Deliberately **not** installed: `google-genai` (Gemini), `reportlab` (PDF), `pytest`, `httpx` — all listed as comments in `requirements.txt:27-30`.
-- No CUDA package is present anywhere in the virtualenv (`pip list` contains no `nvidia-*` or `triton` entries).
-
-### 3.2 Frontend — `frontend/package.json`
-
-React `^19.3.0` + React DOM `^19.3.0`; Vite `^8.3.1` with `@vitejs/plugin-react` `^6.1.1`; TypeScript `~5.9.3`; Tailwind CSS `^4.3.3` via `@tailwindcss/vite`; ESLint `^10.11.0` with `typescript-eslint`, `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`. Toolchain present on the machine: **Node v24.14.0, npm 11.12.0**. Vite dev server is pinned to `127.0.0.1:5173` (`vite.config.ts:9-11`).
-
-**Correction to the project's own documentation:** `README.md:5` and the layout block at `README.md:53` describe the frontend as *"Flutter (desktop + mobile) — not created yet"*. That is stale. The delivered client is a **React web SPA**, not Flutter. `.gitignore:26-36` still carries the Flutter ignore rules, and `frontend/src/data/clinical.ts:146` acknowledges the mismatch in a code comment. No Flutter project (`pubspec.yaml`, `.dart_tool/`) exists.
-
-### 3.3 Notable dependency decision
-
-The runtime dependency list contains **no HTTP client, no database, no ORM and no authentication library**. There is no persistence layer and no user model anywhere in the repository.
+- ✅ `backend/services/` and `backend/utils/` contain **only empty `__init__.py` files**. There is no Gemini client, no history store, no PDF writer.
+- ✅ `tests/` (repo root) contains only `.gitkeep`. The four `test_*.py` files are **CLI verification scripts, not a pytest suite** — `pytest` is not installed (`requirements.txt:30`, commented out).
+- ✅ `docs/` contains only `.gitkeep`.
+- ✅ Both checkpoints are present on disk but git-ignored (`.gitignore:26-30`).
+- ✅ `frontend/dist/` exists **and is tracked in git** despite the `dist/` rule at `.gitignore:23` (see §12.8).
 
 ---
 
-## 4. MMRDR Dataset Information
+## 2. Tech stack
 
-**Verified finding: this repository contains no MMRDR dataset artifacts and no dataset code.**
+### 2.1 Backend — pinned in `backend/requirements.txt`, resolved versions read from `backend/.venv/`
 
-Concretely, all of the following are absent:
+| Package | Pinned | Actually installed | Source |
+|---|---|---|---|
+| Python | 3.10 / 3.11 | **3.10.11** | ✅ venv |
+| torch | `2.14.0+cpu` | **2.14.0+cpu** | ✅ |
+| torchvision | `0.29.0+cpu` | **0.29.0+cpu** | ✅ |
+| fastapi | `0.141.1` | 0.141.1 | `requirements.txt:17` |
+| uvicorn[standard] | `0.54.0` | 0.54.0 | ✅ (`uvicorn-0.54.0.dist-info`) |
+| python-multipart | `0.0.32` | 0.0.32 | `requirements.txt:19` |
+| python-dotenv | `1.2.3` | 1.2.3 | `requirements.txt:20` |
+| numpy | `2.2.6` | **2.2.6** | ✅ |
+| pillow | `12.3.0` | 12.3.0 | `requirements.txt:24` |
+| opencv-python | `5.0.0.93` | 5.0.0.93 | `requirements.txt:25` |
 
-- No dataset directory, no image archives, no CSV/JSON label files, no split manifests, no download scripts.
-- No dataset loader, augmentation pipeline, sampler or `Dataset` subclass anywhere in `backend/`.
-- No evaluation, cross-validation or metrics script. `backend/main.py:20` lists "dataset evaluation or accuracy calculation" among the things deliberately *not* implemented.
-- `docs/` and `tests/` contain only `.gitkeep`.
-- A full-text search of the working tree (backend, docs, tests and frontend sources) returns **no occurrence of the string `MMRDR`**, and no occurrence of any other public-dataset identifier (`Messidor`, `IDDr`, `DeepDR`, `APTOS`, `Kaggle`).
-- The only two dataset-adjacent strings anywhere in the repository are inside the **UWF checkpoint's own `config` dictionary** and are quoted below.
+Installed as `uvicorn[standard]` extras: `websockets 16.1.1`, `watchfiles 1.3.0`, `httptools`, `uvloop`, `python-dotenv`, `PyYAML`, `colorama`.
 
-### 4.1 Dataset-related evidence available (from the checkpoint, not from this project)
+- ✅ `torch 2.14.0+cpu` and `torchvision 0.29.0+cpu` are **CPU-only builds** (`torchvision-0.29.0+cpu.dist-info`). No CUDA wheel is present.
+- ✅ **`opencv-python` is installed but never imported.** A grep for `import cv2` across `backend/**/*.py` returns zero matches. Unused dependency.
+- ✅ **`python-dotenv` is installed but never called.** A grep for `load_dotenv` returns zero matches, so `backend/.env` is **not actually loaded** at runtime. The `GEMINI_API_KEY` / `GEMINI_MODEL` keys it defines are inert.
+- ❌ **Not installed** (`requirements.txt:27-30`, commented out): `google-genai`, `reportlab`, `pytest`, `httpx`.
+- ✅ `timm` is **not installed** and is not needed — the checkpoints are torchvision EfficientNet, not timm (see §3).
 
-The UWF checkpoint stores a 27-key training `config`; the fields that bear on data are reproduced verbatim (`inference/preprocessing.py:8-19, 45-51` and Appendix A.5):
+### 2.2 Frontend — `frontend/package.json`
 
-| Key | Value | Note |
+| Package | Version | Notes |
 |---|---|---|
-| `dataset` | `'CFP'` | **Stale label** — written into the UWF model file by the CFP training script |
-| `experiment` | `'E1_CFP_EfficientNetB0'` | **Stale label** — same reason |
-| `validation_fraction` | `0.1` | A 10 % validation split was used at training time |
-| `batch_size` | `4` | |
-| `num_workers` | `0` | |
-| `epochs` | `20` | Training stopped at epoch 7 (UWF) / 12 (CFP) |
-| `early_stopping_patience` | `5` | |
-| `seed` | `42` | |
-| `image_size` | `512` | Verified, read from the checkpoint at load time |
-| `normalization` | `'ImageNet mean/std'` | Verified |
-| `pretrained` | `'ImageNet'` | Verified |
-| `augmentation` | `RandomHorizontalFlip(p=0.5) + RandomRotation(10)` | **Training-only**; `preprocessing.py:53-56` forbids applying it at inference |
-| `amp` / `data_parallel` / `channels_last` | `True` / `False` / `False` | |
-| `device` / `gpu_count` | `cuda` / `2` | Original training used 2 GPUs |
-| `pytorch_version` / `torchvision_version` / `cuda_version` | `2.10.0+cu128` / `0.25.0+cu128` / `12.8` | Not required for inference here |
+| react / react-dom | `^19.3.0` | the only runtime dependencies |
+| typescript | `~5.9.3` | |
+| vite | `^8.3.1` | dev server `127.0.0.1:5173` (`vite.config.ts:8-11`) |
+| tailwindcss + `@tailwindcss/vite` | `^4.3.3` | Tailwind v4 via plugin, no `tailwind.config.js` |
+| eslint + typescript-eslint + plugins | `^10.11.0` / `^8.71.0` | `npm run lint` available |
+| `@types/react`, `@types/react-dom` | `^19.3.0` | |
 
-The CFP checkpoint has **no `config` key at all**; its top-level keys are exactly `epoch`, `model_state_dict`, `best_val_qwk`, `history` (verified in Appendix A.5).
+- ✅ **No router** (`react-router` absent from `package.json` and from `package-lock.json`).
+- ✅ **No HTTP client** (`axios`, `swr`, `@tanstack/*` all absent).
+- ✅ `node_modules` **is installed** — 121 packages present, so `npm run dev` / `build` / `typecheck` / `lint` are runnable.
+- ✅ `npm run typecheck` (`tsc -b --noEmit`) **exits clean, no errors** — verified this session.
+- ✅ The project description in `package.json:6` self-declares: *"React + TypeScript + Tailwind CSS dashboard (UI only, no model integration)."*
 
-### 4.2 Consequences and open risks
+### 2.3 What the models were trained with (recorded inside the UWF checkpoint)
 
-1. **The 5-class label map is a project assumption, not checkpoint data.** Neither file stores a class→label mapping. The ICDR ordering used throughout the code is defined in `predictor.py:46-52` and mirrored in `frontend/src/data/clinical.ts:42`; if the training label encoder used a different index order, every reported grade is mislabelled while remaining numerically valid. This is the single highest-impact unresolved risk in the project and it cannot be closed without the training script or dataset metadata.
-2. **No dataset is available to re-verify the models.** Accuracy, per-class metrics, confusion matrices and any comparison against MMRDR ground truth are currently unobtainable from this repository.
-3. **The UWF `config` is internally inconsistent** (`dataset='CFP'` in a UWF file). `preprocessing.py:43-51` documents this and treats it as the reason CFP preprocessing defaults are treated as assumptions rather than inferred.
-
----
-
-## 5. CFP and UWF Model Details
-
-All facts in this section were read out of the checkpoint files by `inference/inspect_models.py` (`torch.load(map_location='cpu', weights_only=True)`); the tool explicitly reports `file unchanged by read: True` for both files.
-
-### 5.1 Common properties
-
-| Property | CFP | UWF |
-|---|---|---|
-| File | `EfficientNetB0_CFP_final.pth` | `EfficientNetB0_UWF_final.pt` |
-| Size | 16,408,231 B | 48,652,882 B |
-| Python type | `dict` (checkpoint dict, **not** a bare state_dict, **not** a pickled `nn.Module`) | `dict` (same) |
-| Weights key | `model_state_dict` | `model_state_dict` |
-| Tensors | **374** | **360** |
-| dtypes | `float32`, `int64` | `float32`, `int64` |
-| Device after `map_location="cpu"` | `cpu` | `cpu` |
-| Trunk key prefix | `features` (358 tensors) | `features` (358 tensors) |
-| Trunk stages present | `0 … 8` (9 MBConv stages) | `0 … 8` |
-| Stem conv | `features.0.0.weight` = `(32, 3, 3, 3)` → **3-channel RGB input** | identical |
-| Widest conv | `features.6.1.block.2.fc1.weight` = `(48, 1152, 1, 1)` | identical |
-| Final conv | `features.8.0.weight` = `(1280, 320, 1, 1)` → **1280-d output** | identical |
-| 4-D conv layers | 81 | 81 |
-| `num_batches_tracked` count | 49 (= torchvision B0's BatchNorm count) | 49 |
-
-**Both files share the identical EfficientNet-B0 convolutional trunk.** The 16.4 MB vs 48.7 MB size difference is explained by the UWF file also carrying `optimizer_state_dict`, `scheduler_state_dict`, `scaler_state_dict`, `history` and `config`; it is not a different architecture.
-
-### 5.2 CFP — multi-head network
-
-| Key prefix | Tensors | Meaning |
-|---|---|---|
-| `features` | 358 | torchvision EfficientNet-B0 trunk, unchanged |
-| `dr_head` | 2 | `weight (5, 1280)`, `bias (5,)` → **5-class DR grade**, 1280→5 |
-| `lesion_heads` | 14 | `lesion_heads.0 … lesion_heads.6`, each `Linear(1280, 1)` → 7 binary auxiliary outputs |
-
-- Head layout tag: `multi_head`.
-- Tensor-bearing indices are contiguous from 0 → `nn.ModuleList`.
-- Other top-level metadata: `epoch = 12`; `best_val_qwk = 0.9225706931411989` (`np.float64`); `history` = list of 12 epoch records.
-- **`lesion_heads` are deliberately unnamed.** No label map for them exists in the file, so their ordering and clinical meaning are *unknown*. `model_architecture.py:59-61` and `model_loader.py` treat them as raw numbers that must never be presented as clinical findings.
-- Training-history fields present: `epoch, lr, train_total_loss, train_dr_loss, train_lesion_loss, val_total_loss, val_dr_loss, val_lesion_loss, val_QWK, val_Macro_F1, val_Accuracy`. Final recorded epoch (12): `val_QWK 0.9087346719076914`, `val_Macro_F1 0.7233143910957684`, `val_Accuracy 0.8337078651685393`. The stored `best_val_qwk = 0.92257` is higher than the last epoch, i.e. the best checkpoint was not the final epoch.
-- The multi-task structure (separate DR loss and lesion loss) is confirmed by the presence of `train_dr_loss`/`train_lesion_loss` in the history.
-
-### 5.3 UWF — single-head network
-
-| Key prefix | Tensors | Meaning |
-|---|---|---|
-| `features` | 358 | the same EfficientNet-B0 trunk |
-| `classifier` | 2 | `classifier.1.weight (5, 1280)`, `classifier.1.bias (5,)` → **5-class DR grade**, 1280→5 |
-
-- Head layout tag: `single_head`. The whole file is exactly `torchvision.models.efficientnet_b0(num_classes=5)`.
-- `classifier` has exactly **one tensor-bearing index, `1`**. Index 0 holds no tensors, so slot 0 is a parameter-free module → the stock `nn.Sequential(nn.Dropout(p), nn.Linear(...))` layout. Inspection prints: *"slot 0 is nn.Dropout and holds no tensors"*; the verification run prints `classifier = Sequential(Dropout(p=0.2), Linear(1280, 5))`.
-- Other top-level metadata: `epoch = 7`; `best_qwk = 0.9152520275167323`; `history` = dict with 9 keys covering **epochs 1–7**; `config` = 27 keys (see §4.1).
-- Training-history fields present: `epoch, train_loss, val_loss, val_qwk, val_macro_f1, val_accuracy, val_macro_auc, learning_rate, epoch_time_minutes`. Per-epoch `val_qwk`: 0.9083, 0.8970, 0.9070, 0.9055, 0.9039, 0.9146, **0.9153** (epoch 7 = best).
-
-### 5.4 Honest framing of the recorded metrics
-
-Every number in §5.2/§5.3 (QWK, macro-F1, accuracy, macro-AUC, epoch counts) is **training-time validation metadata stored inside the checkpoint files by the original training run**. This project has not reproduced, re-measured or confirmed any of them. They are reported here only as provenance of the supplied weights.
-
-### 5.5 What the checkpoints do *not* store, and how the project handles it
-
-Documented at `model_architecture.py:81-97`:
-
-- `num_classes` is read from the head's `out_features` (5) and is **never widened or narrowed** to make a load succeed.
-- BatchNorm `eps`/`momentum` and the dropout probability are Python hyperparameters that no `state_dict` can hold; torchvision defaults are used (`DROPOUT_PROB = 0.2`). Dropout is the identity in `eval()`, so it cannot change an inference output.
-- No pooling parameters are stored; `AdaptiveAvgPool2d(1)` is added because a 1280-d head can only consume pooled features, and it adds no keys.
-- The CFP checkpoint stores **no preprocessing config**, so CFP input size (224) and normalisation are documented **assumptions**, flagged as such at runtime by a warning log. UWF's 512 px is checkpoint-verified (`verified=True`).
-
----
-
-## 6. Model Architecture Reconstruction
-
-Implemented in **`backend/inference/model_architecture.py` (224 lines)**, which is the single source of truth for construction. Loading and I/O live in separate modules, so the architecture can be verified in isolation.
-
-### 6.1 Method: the architecture was derived from the checkpoints, not guessed
-
-The module documents the evidence chain used to identify the backbone as torchvision (and to rule out `timm`):
-
-| Observation in the state_dict | What it establishes |
+| Field | Value |
 |---|---|
-| `features.0.0.weight` = `(32, 3, 3, 3)` | stem `Conv2d(3, 32, k=3, s=2, p=1)` → 3-channel RGB |
-| `features.0.1.*` | `BatchNorm2d(32)` directly after the stem |
-| `features.0 … features.8` | 9 top-level MBConv stages |
-| `features.<i>.0.block.<j>.*` | MBConv / ConvBNActivation blocks |
-| `features.<i>.1.block.<j>.*` | fused stages (`features.1 … features.7`) |
-| 64 SE tensors at `features.*.block.2.fc1/.fc2` | Squeeze-Excitation |
-| `num_batches_tracked` present 49 times | exactly torchvision B0's BatchNorm count |
-| `features.8.0.weight` = `(1280, 320, 1, 1)` | final conv → 1280-d pooled features |
-| 358/358 trunk keys match `efficientnet_b0(weights=None).features` in **name, shape and order** | origin = `torchvision.models.efficientnet_b0` |
-| zero `blocks.*`, `conv_head.*`, `bn1.*` keys | `timm` is **excluded** |
+| `pytorch_version` | `2.10.0+cu128` |
+| `torchvision_version` | `0.25.0+cu128` |
+| `cuda_version` | `12.8` |
+| `device` | `cuda` |
+| `gpu_count` | `2` |
+| `amp` | `true` |
+| `optimizer` / `scheduler` / `loss` | `AdamW` / `CosineAnnealingLR` / `CrossEntropyLoss(weight=None)` |
+| `batch_size` / `epochs` / `early_stopping_patience` | `4` / `20` / `5` |
+| `augmentation` | `RandomHorizontalFlip(p=0.5) + RandomRotation(10)` |
+| `seed` | `42` |
 
-Constants declared: `INPUT_CHANNELS = 3`, `BACKBONE_CHANNELS = 1280`, `NUM_CLASSES = 5`, `NUM_BINARY_HEADS = 7`, `EXPECTED_TRUNK_TENSORS = 358`, `DROPOUT_PROB = 0.2`.
-
-### 6.2 Constructed modules
-
-- **`create_efficientnet_b0_trunk()`** — `efficientnet_b0(weights=None).features`. `weights=None` is mandatory so no pretrained download is attempted and the checkpoint stays the only source of parameters. **Both modalities are built from this one factory**, so the backbone is defined exactly once.
-- **`CfpEfficientNetB0`** (CFP): `features` + `avgpool = AdaptiveAvgPool2d(1)` + `dr_head = Linear(1280, 5)` + `lesion_heads = ModuleList([Linear(1280, 1)] * 7)`. `forward` returns `(dr_logits, auxiliary_binary_logits)`.
-- **`create_uwf_model()`** (UWF): `efficientnet_b0(weights=None, num_classes=5)` — trunk plus stock `classifier = Sequential(Dropout, Linear(1280, 5))`.
-
-The two construction functions return **separate instances**; nothing is shared or aliased between CFP and UWF (`model_architecture.py:100-106`).
-
-### 6.3 Verification result (executed, exit code 0)
-
-`python -m inference.verify_architecture --strict-load` reports for **both** checkpoints:
-
-```
-names identical      : True
-shapes identical     : True
-key order identical  : True
-missing keys         : 0
-unexpected keys      : 0
-shape mismatches     : 0
-strict load_state_dict(strict=True)  ->  All keys matched successfully.
-VERDICT: EXACT MATCH - architecture CAN be reconstructed exactly
-```
-
-| Label | Class | Params | Ckpt tensors | Model tensors | Verdict |
-|---|---|---|---|---|---|
-| CFP | `CfpEfficientNetB0` | 4,022,920 | 374 | 374 | **EXACT MATCH** |
-| UWF | `EfficientNet` | 4,013,953 | 360 | 360 | **EXACT MATCH** |
-
-Spot-checks confirmed identical model-vs-checkpoint shapes for `features.0.0.weight`, `features.8.0.weight`, `dr_head.weight`, `lesion_heads.0/6.weight` and `classifier.1.weight`.
-
-> **Counting note (avoids an apparent contradiction):** the parameter figures above are `sum(p.numel() for p in model.parameters())` = **4,022,920** (CFP) and **4,013,953** (UWF). The inspection tool separately reports *"total parameters 4,064,985 / 4,056,018"*, which is the element count of **all** state_dict tensors including BatchNorm buffers. Both numbers are correct; they measure different things. The 8,967-parameter CFP-minus-UWF delta equals the 7 auxiliary heads (`7 × (1280 + 1)`).
+The training stack was CUDA-based. **None of it is required or installed here** — inference runs on a CPU-only PyTorch build (§5).
 
 ---
 
-## 7. Model Loading Verification
+## 3. CFP model — architecture and weight verification
 
-Implemented in **`backend/inference/model_loader.py` (648 lines)**, verified by **`backend/inference/test_model_loading.py`**.
+✅ **VERIFIED by A1, A2, A3, A4.**
 
-### 7.1 Loading policy (deliberately unforgiving)
+### 3.1 Checkpoint file facts (read-only inspection, A1)
 
-1. `torch.load(path, map_location="cpu", weights_only=True)` under a narrow `safe_globals` allow-list (NumPy scalars/dtypes + `TorchVersion`, required because the files store `np.float64` and a `TorchVersion`). Unsafe unpickling is never used.
-2. A fully pickled `nn.Module` is **refused** (`ArchitectureMismatchError`) because its architecture could not be verified.
-3. Weights are taken from `model_state_dict`.
-4. Architecture is built with `weights=None`; the checkpoint is the only parameter source.
-5. **`load_state_dict(state_dict, strict=True)`.** `strict=False` is never used anywhere in the project. On failure, loading aborts and the original error is re-raised verbatim; the architecture is never adjusted to force a load. Rationale recorded in code: a partial load would leave randomly initialised weights inside the network and produce confident nonsense.
-6. `model.to(torch.device("cpu"))`, then `model.eval()`, then **every parameter *and* buffer** is asserted to be on the CPU. Checking only `parameters()` would leave BatchNorm `running_mean`/`running_var` unverified (`model_loader.py:394-403`).
-7. One zero-filled `(1, 3, 64, 64)` CPU probe confirms the real output dimensions — a *structural shape check, not prediction*. No image is read.
-8. `ModelManager` loads each checkpoint exactly once under a lock, is re-entrant and idempotent, and keeps CFP and UWF **completely separate**: a failure on one modality never triggers a silent fallback to the other.
+| Property | Value |
+|---|---|
+| File | `backend/models/EfficientNetB0_CFP_final.pth` |
+| Size | 16,408,231 bytes |
+| Python type after `torch.load` | `builtins.dict` (checkpoint dict, **not** a bare state_dict, **not** a pickled `nn.Module`) |
+| Top-level keys | `best_val_qwk`, `epoch`, `history`, `model_state_dict` |
+| `config` key | ❌ **ABSENT** — this is the single most consequential fact in the whole project (see §6) |
+| Tensors in `model_state_dict` | **374** |
+| Total tensor elements | **4,064,985** |
+| dtypes | `torch.float32`, `torch.int64` |
+| Devices after `map_location='cpu'` | `['cpu']` |
+| `epoch` | `12` |
+| `best_val_qwk` | `0.9225706931411989` (`np.float64`) |
+| `history` | `list`, length 12; entry fields: `epoch, lr, train_dr_loss, train_lesion_loss, train_total_loss, val_Accuracy, val_Macro_F1, val_QWK, val_dr_loss, val_lesion_loss, val_total_loss` |
+| File unchanged by inspection | ✅ `True` |
 
-### 7.2 Executed verification result (`python -m inference.test_model_loading`, exit code 0)
+The `history` field names confirm this checkpoint came from a **multi-task** run: separate `train_dr_loss` / `train_lesion_loss` and `val_dr_loss` / `val_lesion_loss` terms.
 
-```
-                      CFP                         UWF
-Loaded                YES                         YES
-Device                cpu                         cpu
-Eval mode             True                        True
-Parameters                4,022,920        4,013,953
-Classification outputs            5                5
-Lesion heads                      7              n/a
-```
+### 3.2 Reconstructed architecture
 
-Per-modality detail:
+Defined once in `backend/inference/model_architecture.py:165` as `CfpEfficientNetB0`:
 
-| Check | CFP | UWF |
+| Key prefix | Tensors | Module |
 |---|---|---|
-| Checkpoint present | YES | YES |
-| Object type | `nn.Module` | `nn.Module` |
-| Strict load | `strict=True`, **374 tensors from `model_state_dict`, 0 missing, 0 unexpected** | `strict=True`, **360 tensors from `model_state_dict`, 0 missing, 0 unexpected** |
-| Device (params **and** buffers) | cpu | cpu |
-| Parameters not on CPU | **0** | **0** |
-| Eval mode | True | True |
-| Classification outputs | 5 | 5 |
-| Head | `dr_head = nn.Linear(1280, 5)` | `classifier = Sequential(Dropout(p=0.2), Linear(1280, 5))` |
-| Auxiliary binary heads | 7 | n/a |
-| Checkpoint metadata | `epoch=12`, `best_val_qwk=0.9225706931411989` | `epoch=7`, `best_val_qwk=0.9152520275167323`, `config` present |
+| `features.*` | 358 | `torchvision.models.efficientnet_b0(weights=None).features` — MBConv stages 0–8 |
+| `avgpool` | 0 (parameter-free) | `nn.AdaptiveAvgPool2d(1)` |
+| `dr_head.*` | 2 | `nn.Linear(1280, 5)` — bare Linear, **not** a Sequential, so **no dropout** |
+| `lesion_heads.0…6.*` | 14 | `nn.ModuleList` of 7 × `nn.Linear(1280, 1)` — binary auxiliary heads |
 
-Terminal report of the script:
+`forward()` returns `(dr_logits, auxiliary_binary_logits)` — `model_architecture.py:193`.
+
+### 3.3 Why torchvision and not timm — ✅ proven from the keys, not assumed
+
+`model_architecture.py:12-40` records the argument, and A2 re-checks it on the real files:
+
+- `features.0.0.weight` = `(32, 3, 3, 3)` → stem `Conv2d(3, 32, k=3, s=2, p=1)` → **3-channel RGB input**.
+- `features.8.0.weight` = `(1280, 320, 1, 1)` → final conv → **1280-d pooled features**.
+- Trunk stages present: `[0,1,2,3,4,5,6,7,8]`; 81 4-D conv layers; 64 Squeeze-Excitation tensors.
+- 49 `num_batches_tracked` int64 buffers = exactly torchvision B0's BatchNorm count.
+- **Zero** `blocks.*`, `conv_head.*` or `bn1.*` keys → **timm is ruled out**.
+- A2 reports `timm: not installed (and not required)`.
+
+### 3.4 Architecture ↔ checkpoint comparison (A2)
 
 ```
-- CFP weights loaded successfully: YES
-- UWF weights loaded successfully: YES
-- CFP device: cpu        - UWF device: cpu
-- CFP output classes: 5  - UWF output classes: 5
-- CFP lesion heads count: 7
-- Eval mode status: CFP=True, UWF=True
-- CUDA availability: False
-- Any error: none
+CFP  ->  EfficientNetB0_CFP_final.pth
+  total parameters   : 4,022,920
+  model tensors      : 374
+  checkpoint tensors : 374
+  checkpoint 'features.*' tensors : 358 (expected 358)
+  names identical      : True
+  shapes identical     : True
+  key order identical  : True
+  missing keys         : 0
+  unexpected keys     : 0
+  shape mismatches     : 0
+  spot-checks:
+    OK  features.0.0.weight     model=(32,3,3,3)      checkpoint=(32,3,3,3)
+    OK  features.8.0.weight     model=(1280,320,1,1)  checkpoint=(1280,320,1,1)
+    OK  dr_head.weight          model=(5,1280)         checkpoint=(5,1280)
+    OK  lesion_heads.0.weight   model=(1,1280)         checkpoint=(1,1280)
+    OK  lesion_heads.6.weight   model=(1,1280)         checkpoint=(1,1280)
+  VERDICT: EXACT MATCH - architecture CAN be reconstructed exactly
 ```
 
-Both checkpoints load into the reconstructed architectures with `strict=True`, are in eval mode, and every parameter and buffer is on the CPU. **No image was read and no prediction was made.**
-
-### 7.3 Preprocessing layer — implemented and available, but never exercised on a real image
-
-`inference/preprocessing.py` (312 lines) is complete: EXIF transpose, RGB conversion, format allow-list (JPEG/PNG/BMP/TIFF/WEBP), bilinear antialiased resize, ImageNet normalisation, output `(1, 3, S, S)`. It refuses training-time augmentation. Effective configuration as reported at runtime:
-
-| Modality | Size | Mean / Std | Source | Verified? |
-|---|---|---|---|---|
-| CFP | **224** | ImageNet | ASSUMED — checkpoint has no `config` | **No** (logged as a warning) |
-| UWF | **512** | ImageNet | read from `EfficientNetB0_UWF_final.pt` `config` | Yes |
-
-### 7.4 Prediction function — implemented but **unverified**
-
-`inference/predictor.py` implements `predict()` end-to-end: modality resolution → model load → preprocessing → CPU forward → softmax → argmax/label/confidence → full 5-class probability dictionary, with the ICDR mapping and correct error handling.
-
-It has, however, **never been executed on a real image**:
-
-- `backend/test_images/` does not exist; the repository contains no retinal image of any kind.
-- `python test_prediction.py` (no `--image`) exits with the message *"INFERENCE NOT TESTED … No image was invented or synthesised, so no prediction is reported."*
-- The script's own module docstring states it implements *"no API, no Grad-CAM and no metrics"*.
-- `main.py` contains no import of `predictor` at all, so the API cannot and does not call it.
-
-**Therefore no prediction result, accuracy figure or per-class output exists for this project.** The 10 contract assertions written into `test_prediction.py:96-166` are unexecuted.
-
----
-
-## 8. CPU-Only Setup and Verification
-
-### 8.1 Mechanism
-
-- `requirements.txt` pins `torch==2.14.0+cpu` and `torchvision==0.29.0+cpu` and adds the PyTorch CPU wheel index so the `+cpu` builds are resolved rather than the CUDA defaults.
-- `README.md` states Python 3.10/3.11 and *"No NVIDIA GPU — everything runs on CPU, no CUDA packages are installed."* Confirmed: `pip list` contains no `nvidia-*` or `triton` packages.
-- Device selection is hard-coded, not configurable: `DEVICE = "cpu"` (`main.py:56`), `CPU_DEVICE = torch.device("cpu")` (`model_loader.py:84`).
-
-### 8.2 Verified on this machine
+### 3.5 Weight loading (A3)
 
 | Check | Result |
 |---|---|
-| `torch.cuda.is_available()` | **`False`** |
-| `torch.version.cuda` | **`None`** (no CUDA build present) |
-| Installed torch / torchvision | `2.14.0+cpu` / `0.29.0+cpu` |
-| Parameters not on CPU after load | **0** for both models |
-| Buffers on CPU after load | asserted for both models (BatchNorm statistics included) |
-| Device used by the API | `cpu` (hard-coded, never selected at runtime) |
-| Live `GET /health` response | `{"status":"healthy","device":"cpu","cuda_available":false}` |
+| Loaded via `ModelManager` | ✅ YES |
+| `load_state_dict(strict=True)` | ✅ **succeeded — 374 tensors from `model_state_dict`, 0 missing, 0 unexpected** |
+| Head layout | `multi_head` (auto-detected from the keys, `model_loader.py:273`) |
+| `model.training` | `False` (eval mode) ✅ |
+| Device | `cpu` ✅ |
+| Parameters *and* buffers on CPU | ✅ verified — 0 off-CPU |
+| `dr_head` | `nn.Linear(1280, 5)` ✅ |
+| `lesion_heads` | `nn.ModuleList` with exactly 7 × `nn.Linear(1280, 1)` ✅ |
+| Classification outputs | `5` ✅ |
+| Zero-tensor forward probe | ✅ returns `(1, 5)` and `(1, 7)` |
 
-### 8.3 Training-side vs inference-side device
+**`strict=True` is never relaxed anywhere in the project.** `model_loader.py:428-446` documents and enforces this: a partial load would leave randomly initialised weights in the network and produce confident nonsense.
 
-The checkpoints record `device = cuda`, `gpu_count = 2`, `pytorch_version = 2.10.0+cu128`, `torchvision_version = 0.25.0+cu128`, `cuda_version = 12.8`. Those CUDA builds are **not required and not installed**; the tensors are `float32` and load with `map_location="cpu"` (`model_architecture.py:94-97`).
+**Parameter count, reconciled.** Two different totals appear in this repository, and both are correct — they count different things:
 
-### 8.4 Enforced, not merely documented
-
-CPU-only operation is defended in code, not just in prose: `map_location="cpu"` at load; an explicit `.to(CPU_DEVICE)`; a per-tensor device assertion that raises `ArchitectureMismatchError` naming the offending parameter; `torch.no_grad()` around every forward; and a docstring in `main.py:22-24` noting that because the API loads no model, *"this app starts instantly and cannot touch CUDA."*
-
----
-
-## 9. FastAPI Backend Status
-
-**Status: a working but deliberately non-inferential skeleton.** It starts, serves three endpoints and refuses to touch the networks.
-
-| Item | State |
-|---|---|
-| App | `backend/main.py`, 206 lines, `API_VERSION = "0.3.0-dev"` |
-| Title / OpenAPI version | `RetinaGrade AI API` / `0.3.0-dev` (read from live `/openapi.json`) |
-| Models loaded at startup | **None.** There is no `lifespan` hook; `inference/` is not imported |
-| CORS | `CORSMiddleware`, allow-listed localhost origins + `^http://(localhost\|127\.0\.0\.1)(:\d+)?$` regex, methods `GET, POST, OPTIONS`, headers `*` |
-| Error handling | global `Exception` handler → HTTP 500 with a generic message; tracebacks are logged server-side only and never returned |
-| Pydantic schemas | `RootResponse`, `HealthResponse`, `PredictDevResponse`, `ErrorBody`/`ErrorResponse` (`schemas/api.py`) |
-| Upload cap | `MAX_UPLOAD_BYTES = 25 MB` (matches the frontend constant) |
-| Prediction schemas | **Absent by design** — `schemas/api.py:3-7` explains that leaving them would imply inference that does not exist |
-| `services/` and `utils/` | Empty `__init__.py` only |
-
-### 9.1 Live verification (uvicorn started, requests issued, then stopped)
-
-```
-GET  /            -> 200 {"app":"RetinaGrade AI","status":"running"}
-GET  /health      -> 200 {"status":"healthy","device":"cpu","cuda_available":false}
-GET  /openapi.json-> paths: /, /health, /predict   info.version: 0.3.0-dev
-```
-
-Startup log: `Waiting for application startup. / Application startup complete. / Uvicorn running on http://127.0.0.1:8124`. No model was loaded and no checkpoint file was read by the API process.
-
-### 9.2 Important version-control caveat
-
-`git diff` shows `backend/main.py` and `backend/schemas/api.py` are **modified in the working tree but not committed**, and the modification *removes* a previously written inference-enabled API:
-
-| Capability | In commit `759dc60` | In the current working tree |
+| Number | Counted by | Composition |
 |---|---|---|
-| API version | `0.2.0` | `0.3.0-dev` |
-| `GET /models` (per-modality status, class list, preprocessing) | present | **removed** |
-| Lifespan startup model preload via `manager.describe()` | present | **removed** |
-| `InferenceError` → HTTP handler | present | **removed** |
-| `POST /predict` calling `predictor.predict` | present | **replaced by validation-only stub** |
-| `PredictResponse`, `PredictionResultModel`, `ModelsInfoResponse` schemas | present | **removed** |
+| **4,022,920** | `test_models.py` / `test_model_loading.py` (live run) | `nn.Module.parameters()` only — the 49 BatchNorm `running_mean`/`running_var` buffers are *not* included |
+| **4,064,985** | `inspect_models.py` (live run) and the `model_architecture.py:43` docstring | every tensor in the state_dict, i.e. parameters **+ 42,065 BatchNorm buffers** |
 
-Any statement about the API must therefore be read against the *working tree*, which is what this report describes. The inference-wired version exists only in Git history and would need to be reinstated (not merely retyped) before a prediction endpoint exists.
+✅ Verified by direct summation: `4,022,920 + 42,065 = 4,064,985`. The two figures are not a discrepancy; they are two different definitions. **Report either one, but name which definition you used.**
+
+### 3.6 Auxiliary heads — ⚠️ meaning is UNKNOWN
+
+- ✅ **Count verified:** 7 heads.
+- ❌ **Semantics unknown and unknowable from the file.** The CFP checkpoint stores no label map for `lesion_heads.0…6`.
+- `model_architecture.py:59-61`: *"their ordering and meaning are unknown. They stay unnamed raw outputs and must never be presented as named clinical findings."*
+- `test_model_loading.py:232-235` repeats the warning in its output.
+- `predictor.py:158-167` will return them **only** if the caller passes `include_raw_auxiliary=True`, and then only as `aux_head_0 … aux_head_6` with an explicit `auxiliary_note` disclaiming clinical meaning.
 
 ---
 
-## 10. Current API Endpoints
+## 4. UWF model — architecture and weight verification
 
-Exactly **three** endpoints, confirmed against the live OpenAPI document. **None of them runs a neural network.**
+✅ **VERIFIED by A1, A2, A3, A4.**
 
-| Method | Path | Purpose | Model run? |
+### 4.1 Checkpoint file facts (A1)
+
+| Property | Value |
+|---|---|
+| File | `backend/models/EfficientNetB0_UWF_final.pt` |
+| Size | 48,652,882 bytes |
+| Python type | `builtins.dict` (checkpoint dict) |
+| Top-level keys | `best_val_qwk`, `config`, `epoch`, `history`, `model_state_dict`, `optimizer_state_dict`, `scheduler_state_dict`, `scaler_state_dict` |
+| Tensors in `model_state_dict` | **360** |
+| Total tensor elements | **4,056,018** |
+| dtypes / devices | `float32` + `int64` / `['cpu']` |
+| `epoch` | `7` |
+| `best_val_qwk` | `0.9152520275167323` (Python `float`) |
+| `history` | `dict`, 9 fields: `epoch, epoch_time_minutes, learning_rate, train_loss, val_loss, val_accuracy, val_macro_f1, val_macro_auc, val_qwk` |
+| `config` | `dict`, 27 keys (full dump in §4.5) |
+| File unchanged by inspection | ✅ `True` |
+
+This file also carries **optimizer / scheduler / AMP-scaler state** — the CFP file does not. That is why the two files differ in size (48.6 MB vs 16.4 MB) despite near-identical weight counts.
+
+### 4.2 Reconstructed architecture
+
+`model_architecture.py:217` → `create_uwf_model()` returns stock `torchvision.models.efficientnet_b0(weights=None, num_classes=5)`. No custom class needed.
+
+| Key prefix | Tensors | Module |
+|---|---|---|
+| `features.*` | 358 | identical EfficientNet-B0 trunk (same factory as CFP) |
+| `classifier.0` | 0 | `nn.Dropout(p=0.2)` — parameter-free, hence invisible in the state_dict |
+| `classifier.1.*` | 2 | `nn.Linear(1280, 5)` |
+
+`classifier` has exactly one tensor-bearing index, `1`; index `0` holds no tensors. That is the stock `nn.Sequential(nn.Dropout(p), nn.Linear(...))` signature, which is why A2 concludes the file *is* `efficientnet_b0(num_classes=5)`. `classifier.1.weight` = `(5, 1280)` confirms `num_classes: 5`.
+
+### 4.3 Architecture ↔ checkpoint comparison (A2)
+
+```
+UWF  ->  EfficientNetB0_UWF_final.pt
+  total parameters   : 4,013,953
+  model tensors      : 360
+  checkpoint tensors : 360
+  checkpoint 'features.*' tensors : 358 (expected 358)
+  names identical      : True
+  shapes identical     : True
+  key order identical  : True
+  missing keys         : 0
+  unexpected keys     : 0
+  shape mismatches     : 0
+  spot-checks:
+    OK  features.0.0.weight     model=(32,3,3,3)      checkpoint=(32,3,3,3)
+    OK  features.8.0.weight     model=(1280,320,1,1)  checkpoint=(1280,320,1,1)
+    OK  classifier.1.weight     model=(5,1280)         checkpoint=(5,1280)
+  VERDICT: EXACT MATCH - architecture CAN be reconstructed exactly
+```
+
+### 4.4 Weight loading (A3)
+
+| Check | Result |
+|---|---|
+| Loaded via `ModelManager` | ✅ YES |
+| `load_state_dict(strict=True)` | ✅ **succeeded — 360 tensors from `model_state_dict`, 0 missing, 0 unexpected** |
+| Head layout | `single_head` (auto-detected) |
+| `model.training` | `False` (eval mode) ✅ |
+| Device | `cpu` ✅ |
+| Parameters *and* buffers on CPU | ✅ verified |
+| `classifier` | `nn.Sequential`, length 2, `classifier[0]` is `nn.Dropout(p=0.2)`, `classifier[1]` is `nn.Linear(1280, 5)` ✅ |
+| Classification outputs | `5` ✅ |
+| Zero-tensor forward probe | ✅ returns a single `(1, 5)` tensor |
+
+Parameter reconciliation (same two definitions as §3.5): **4,013,953** parameters, **+ 42,065** BatchNorm buffers = **4,056,018** state_dict elements. ✅ Verified by direct summation.
+
+### 4.5 The UWF `config` — read from the file, but ⚠️ internally inconsistent
+
+Full 27-key dump reproduced from A4:
+
+```json
+{
+  "experiment": "E1_CFP_EfficientNetB0",
+  "dataset": "CFP",
+  "model": "EfficientNet-B0",
+  "seed": 42,
+  "image_size": 512,
+  "num_classes": 5,
+  "batch_size": 4,
+  "num_workers": 0,
+  "epochs": 20,
+  "early_stopping_patience": 5,
+  "validation_fraction": 0.1,
+  "loss": "CrossEntropyLoss(weight=None)",
+  "optimizer": "AdamW",
+  "learning_rate": 0.0001,
+  "weight_decay": 0.0001,
+  "scheduler": "CosineAnnealingLR",
+  "augmentation": "RandomHorizontalFlip(p=0.5) + RandomRotation(10)",
+  "normalization": "ImageNet mean/std",
+  "pretrained": "ImageNet",
+  "amp": true,
+  "data_parallel": false,
+  "channels_last": false,
+  "device": "cuda",
+  "gpu_count": 2,
+  "pytorch_version": "2.10.0+cu128",
+  "torchvision_version": "0.25.0+cu128",
+  "cuda_version": "12.8"
+}
+```
+
+**⚠️ Two stale fields, and they matter.** This is the UWF model file, yet `config["experiment"] = "E1_CFP_EfficientNetB0"` and `config["dataset"] = "CFP"`. Both are labels the training script wrote and never updated. `preprocessing.py:43-51` flags this explicitly. There is a third inconsistency: `history` contains `val_macro_auc`, which is not a meaningful metric for a 5-class `CrossEntropyLoss` ordinal model — another stale-script artifact.
+
+**Consequence:** `image_size` and `normalization` *are* read from this dict (they are the only preprocessing evidence in either file), but the dict cannot be trusted wholesale. This is exactly why the CFP values are treated as assumptions rather than inferred from the UWF config (§6).
+
+### 4.6 Head-count cross-check
+
+The CFP model has 7 extra binary heads relative to UWF. The two checkpoints' parameter counts differ by exactly `7 × 1,281 = 8,967` (`4,022,920 − 4,013,953 = 8,967`), which is the fingerprint of 7 × `Linear(1280, 1)` with bias. ✅ Consistent and independently corroborating.
+
+---
+
+## 5. CPU-only verification
+
+✅ **VERIFIED by A3, A4, A5.** CPU-only is not a convention here; it is asserted in code and checked by the scripts.
+
+| Evidence | Value | Where |
+|---|---|---|
+| `torch.__version__` | `2.14.0+cpu` | A3, A4 |
+| `torchvision.__version__` | `0.29.0+cpu` | A4 |
+| `torch.version.cuda` | **`None`** (CPU-only build) | A3, A4 |
+| `torch.cuda.is_available()` | **`False`** | A3, A4, A5 |
+| Installed CUDA wheels | none — `torchvision-0.29.0+cpu.dist-info` | A7 |
+| `CPU_DEVICE` constant | `torch.device("cpu")` | `model_loader.py:84` |
+
+**Enforcement mechanisms in the code (all confirmed by reading):**
+
+1. `safe_load_checkpoint` uses `torch.load(path, map_location="cpu", weights_only=True)` inside a `torch.serialization.safe_globals([...])` block — `model_loader.py:238-240`. Unsafe unpickling is never used.
+2. A checkpoint that turns out to be a **fully pickled `nn.Module`** is **rejected** (`ArchitectureMismatchError`) rather than accepted, because an unverified network cannot be checked — `model_loader.py:247-253`.
+3. `model.to(CPU_DEVICE)` then `model.eval()` — `model_loader.py:450-451`.
+4. **Every parameter *and* every buffer** is iterated and asserted to be on CPU. `model_loader.py:394-459` and `test_model_loading.py:66-68`. Checking `parameters()` alone would leave all BatchNorm `running_mean`/`running_var` unverified, so buffers are checked explicitly.
+5. The structural forward probe is created on `device=CPU_DEVICE` — `model_loader.py:503`.
+6. `LoadedModel.dr_logits` / `binary_logits` force `.to(CPU_DEVICE)` inside `torch.no_grad()` — `model_loader.py:197-212`.
+7. `test_model_loading.verify_cpu_only()` **asserts** `cuda_available is False` and fails the run if CUDA appears — `test_model_loading.py:259`.
+8. `predictor.py:178` hardcodes `device=str(CPU_DEVICE)` in the result payload.
+9. `main.py:56` sets `DEVICE = "cpu"` with the comment *"CPU is mandatory. CUDA is reported but never used."*
+10. `test_prediction.py:84-88` re-checks `torch.cuda.is_available()` at prediction time and folds it into the contract assertions.
+
+**Train/inference split:** the checkpoints were trained on CUDA 12.8 across 2 GPUs with AMP (`config` in the UWF file). Their tensors are `float32` and deserialise onto the CPU with `map_location="cpu"`. No CUDA package is required or installed.
+
+**A2 explicitly reports `timm: not installed (and not required)`** and `CUDA available: False`.
+
+---
+
+## 6. Preprocessing status
+
+Implemented in `backend/inference/preprocessing.py`. The pipeline is:
+
+```
+bytes / PIL / file-like
+  → decode_image()      Pillow open, format whitelist, exif_transpose, convert("RGB")
+  → TF.resize(S, S)     bilinear, antialias=True
+  → TF.to_tensor()      float32 in [0, 1]
+  → TF.normalize()      (x - mean) / std
+  → unsqueeze(0)        → (1, 3, S, S) CPU tensor
+```
+
+- ✅ Accepted formats: `JPEG, PNG, BMP, TIFF, WEBP` (`preprocessing.py:77`).
+- ✅ `preprocessing.py:53-55`: training augmentation (`RandomHorizontalFlip(p=0.5) + RandomRotation(10)`) is **deliberately not applied at inference**, and the payload reports `training_augmentation_applied: false`.
+- ✅ Decode failures raise `InvalidImageError` with specific messages for empty input, unsupported format, corrupt file, and wrong Python type.
+
+### 6.1 UWF preprocessing — ✅ VERIFIED from the checkpoint
+
+| Property | Value | Provenance |
+|---|---|---|
+| `image_size` | **512** | ✅ read from `config["image_size"]` at load time (`preprocessing.py:164-183`) |
+| `normalization` | **ImageNet mean/std** — mean `(0.485, 0.456, 0.406)`, std `(0.229, 0.224, 0.225)` | ✅ `config["normalization"] = "ImageNet mean/std"`, `config["pretrained"] = "ImageNet"` |
+| `color_space` | `RGB` | ✅ explicit `convert("RGB")` |
+| `verified` flag | **`True`** | ✅ `preprocessing.py:115` |
+| Runtime report | `values_verified_by_checkpoint: true`, `normalization_source: "checkpoint config"` | ✅ A5 |
+
+`CHECKPOINT_IMAGE_SIZE = 512` (`preprocessing.py:85`). The live run reports `Config source: read from checkpoint config (image_size=512)`.
+
+### 6.2 CFP preprocessing — ⚠️ ASSUMED / UNVERIFIED
+
+**The CFP checkpoint stores no `config` key at all.** Its top-level keys are exactly `best_val_qwk`, `epoch`, `history`, `model_state_dict` (✅ A1). There is no image size, no normalization, no colour mode — nothing.
+
+| Property | Value used | Status |
+|---|---|---|
+| `image_size` | **224** | ⚠️ **ASSUMED** |
+| `normalization` | ImageNet mean/std | ⚠️ **ASSUMED** (justified only *indirectly*, by the sibling UWF run) |
+| `color_space` | `RGB` | ✅ code-level fact |
+| `verified` flag | **`False`** | ✅ `preprocessing.py:105` |
+| Runtime report | `values_verified_by_checkpoint: false`, `normalization_source: "ASSUMED (default, not in checkpoint)"` | ✅ A5 |
+
+The code says all of this out loud, at three levels:
+
+- `preprocessing.py:21-38` — the `ASSUMPTION` block in the module docstring.
+- `preprocessing.py:98-104` — the `source` string stored in `_DEFAULTS["cfp"]`.
+- `preprocessing.py:196-201` — a `logger.warning("Preprocessing for cfp is an ASSUMPTION, not checkpoint data: …")` fires on **every** CFP load. It fired in the live CFP run (A5).
+
+The library's own warning, reproduced live:
+
+```
+** ASSUMPTION WARNING **
+  The CFP checkpoint does not state these values, so they are
+  a documented default, not checkpoint data. The sibling UWF checkpoint
+  records image_size=512. If this model was trained at a
+  different size the logits are still produced but accuracy is not
+  trustworthy. Re-run with --image-size to test another size.
+```
+
+**Why 224 is a silent-failure risk, in the library's own words** (`preprocessing.py:30-38`): *"the sibling UWF checkpoint says `512`; if the CFP run also trained at 512 then 224 is the wrong size and accuracy will suffer. EfficientNet-B0 is fully convolutional with global average pooling, so any size runs without erroring — a wrong size fails silently, which is exactly why this is reported rather than hidden."*
+
+**Therefore: the CFP confidence figure in §7 is NOT a validated accuracy number.** It is a well-formed model output computed under a guessed input size.
+
+### 6.3 Escape hatch
+
+- `with_image_size(config, size)` (`preprocessing.py:213`) and `test_prediction.py --image-size N` allow an override.
+- ✅ An override **always clears `verified`**, so an override can never masquerade as checkpoint data (`preprocessing.py:217-226`).
+- `get_config()` also flips `verified` to `True` if a positive `image_size` appears in a checkpoint config, and **downgrades to `False` with a warning** if a checkpoint reports a non-ImageNet normalization (`preprocessing.py:184-191`).
+
+### 6.4 Summary table
+
+| Modality | Image size | Normalization | Provenance | `verified` |
+|---|---|---|---|---|
+| **UWF** | 512 | ImageNet mean/std | ✅ **read from checkpoint `config`** | **True** |
+| **CFP** | 224 | ImageNet mean/std | ⚠️ **ASSUMED — not in checkpoint** | **False** |
+
+---
+
+## 7. Real-image prediction results
+
+✅ **Both results VERIFIED by live execution (A5), reproduced in this session.**
+
+**Command form:**
+```
+backend\.venv\Scripts\python.exe test_prediction.py --image "test_images\cfp\tr000001.jpg" --modality cfp
+backend\.venv\Scripts\python.exe test_prediction.py --image "test_images\uwf\tr000001.jpg" --modality uwf
+```
+
+### 7.1 Headline results
+
+| | **CFP** | **UWF** |
+|---|---|---|
+| Image | `test_images/cfp/tr000001.jpg` | `test_images/uwf/tr000001.jpg` |
+| Image dimensions | 2077 × 2077 RGB JPEG | 2600 × 2048 RGB JPEG |
+| SHA-256 (first 16) | `092D6D04CB618268` | `5AB0576E2DB01E54` |
+| **Predicted label** | **Moderate** | **Mild** |
+| `predicted_class` | 2 | 1 |
+| `description` | Moderate non-proliferative DR | Mild non-proliferative DR |
+| **Confidence** | **0.703081 = 70.3081 %** (≈ 70.31 %) | **0.881828 = 88.1828 %** (≈ 88.18 %) |
+| Checkpoint | `EfficientNetB0_CFP_final.pth` | `EfficientNetB0_UWF_final.pt` |
+| Model | EfficientNet-B0 | EfficientNet-B0 |
+| **Device** | **`cpu`** | **`cpu`** |
+| Input size used | 224 (⚠️ assumed) | 512 (✅ from checkpoint) |
+| Probability sum | 0.999999 | 0.999999 |
+| Contract checks | **10 / 10 PASS** | **10 / 10 PASS** |
+
+### 7.2 Full probability vectors
+
+**CFP** — `tr000001.jpg`, class 2 wins:
+
+| Class | Index | Probability |
+|---|---|---|
+| No DR | 0 | 0.004808 |
+| Mild | 1 | 0.018070 |
+| **Moderate** | **2** | **0.703081** ← argmax |
+| Severe | 3 | 0.273637 |
+| Proliferative DR | 4 | 0.000403 |
+| | | **Σ = 0.999999** |
+
+**UWF** — `tr000001.jpg`, class 1 wins:
+
+| Class | Index | Probability |
+|---|---|---|
+| No DR | 0 | 0.023327 |
+| **Mild** | **1** | **0.881828** ← argmax |
+| Moderate | 2 | 0.088653 |
+| Severe | 3 | 0.004967 |
+| Proliferative DR | 4 | 0.001224 |
+| | | **Σ = 0.999999** |
+
+### 7.3 Output contract — both models, all checks PASS
+
+`test_prediction.py:110-162` asserts ten things. Both live runs printed `CONTRACT: ALL CHECKS PASSED`:
+
+| # | Assertion | CFP | UWF |
 |---|---|---|---|
-| `GET` | `/` | Service banner (`app`, `status`) | **NO** |
-| `GET` | `/health` | Liveness + device facts (`status`, `device`, `cuda_available`) | **NO** |
-| `POST` | `/predict` | **Validates the request only**, returns a temporary placeholder | **NO** |
+| 1 | exactly 5 probabilities | PASS | PASS |
+| 2 | probability keys match the DR class mapping | PASS | PASS |
+| 3 | every probability in [0, 1] | PASS (min 0.000403 / max 0.703081) | PASS (min 0.001224 / max 0.881828) |
+| 4 | probabilities sum to ~1 (tolerance 1e-4) | PASS (0.999999) | PASS (0.999999) |
+| 5 | `predicted_class` in range | PASS | PASS |
+| 6 | `predicted_class` has the highest probability | PASS (argmax = 2) | PASS (argmax = 1) |
+| 7 | `confidence` equals the highest probability | PASS | PASS |
+| 8 | `label` matches `predicted_class` | PASS | PASS |
+| 9 | device is CPU | PASS (`cpu`) | PASS (`cpu`) |
+| 10 | CUDA is not used | PASS | PASS |
 
-`POST /predict` accepts `image: UploadFile` (file field) and `modality: str` (form field) and performs exactly five validation steps (`main.py:155-166`):
+The Σ = 0.999999 is a rounding artefact, not a bug: `predictor.py:176` rounds each of the 5 values to 6 decimals, so the maximum possible drift from 1.0 is 2.5 × 10⁻⁶. The tolerance is 1e-4 (`test_prediction.py:62`).
 
-1. `modality` ∈ {`cfp`, `uwf`}, case-insensitive, whitespace-trimmed
-2. an `image` file field was actually sent
-3. the file has a filename
-4. the file is not empty
-5. the file is within the 25 MB limit
+### 7.4 ⚠️ How far these results can and cannot be pushed
 
-The image bytes are read **only** to test emptiness and size. They are not decoded, not preprocessed and not passed to any network.
+This section is deliberately conservative. Do not quote §7.1 as a performance claim.
 
-### 10.1 Live behaviour of `POST /predict` (verified with curl)
+1. **`n = 1` per modality.** These are two single-image runs. They prove the pipeline executes and produces a well-formed distribution. They prove **nothing** about accuracy, sensitivity, specificity, or agreement with any reference standard.
+2. **⚠️ The CFP number rests on an assumed input size.** 224 was guessed (§6.2). If the CFP run actually trained at 512 — which its own sibling did — 70.31 % is meaningless. This is the single largest caveat in the project.
+3. **The two images are not the same image.** Despite the identical filename `tr000001.jpg`, SHA-256 differs (`092D…` vs `5AB0…`) and the dimensions differ (2077×2077 vs 2600×2048). They are two different source captures. **The Moderate-vs-Mild disagreement is therefore not evidence of a bug and not evidence of anything** — the two models were shown different pictures. It must not be reported as cross-modality disagreement.
+4. **No ground truth is available.** Neither image has a label in the repository, so no accuracy, QWK, or confusion matrix can be computed. The checkpoints carry their *own training-time* `val_QWK` (CFP `0.9226`, UWF `0.9153`) — that is the training run's validation score, not a measurement of these images.
+5. **The label ordering is an assumption about the checkpoints, not a fact stored in them.** Neither file contains a class-index → grade map. `predictor.py:27-52` documents the mapping as "fixed by the ICDR 5-grade scale" and states the order is "the logit order produced by `dr_head` (CFP) and `classifier.1` (UWF)". That the trained model's index 0 really means "No DR" is a reasonable, well-documented inference — **but it is not verifiable from the files.** A permuted head would produce confident nonsense with a perfect output contract.
+6. **Auxiliary heads were not requested.** `include_raw_auxiliary` was not set, so no `auxiliary_raw_outputs` appear in either payload.
+7. **`proba` sums are structural, not semantic.** A sum of 1.0 proves the softmax ran. It says nothing about whether the model was right.
 
-| Request | Response |
+---
+
+## 8. FastAPI status and endpoints
+
+`backend/main.py`, 206 lines. `API_VERSION = "0.3.0-dev"` (`main.py:53`).
+
+### 8.1 Endpoints — ✅ exactly three, all reachable
+
+Confirmed by A6 against the live service on `http://127.0.0.1:8000`. `GET /openapi.json` lists precisely `/`, `/health`, `/predict` — no more.
+
+| Method | Path | Runs a model? | Live response (A6) |
+|---|---|---|---|
+| `GET` | `/` | **NO** | `{"app":"RetinaGrade AI","status":"running"}` |
+| `GET` | `/health` | **NO** | `{"status":"healthy","device":"cpu","cuda_available":false}` |
+| `POST` | `/predict` | ❌ **NO** | see §8.2 |
+
+Interactive docs are available at `http://127.0.0.1:8000/docs` (FastAPI default; not disabled).
+
+### 8.2 `POST /predict` — ❌ VALIDATION ONLY, no inference
+
+This is the most important thing to be unambiguous about. From the source and confirmed live:
+
+- ✅ A valid CFP upload returned `{"success":true,"message":"Image received","modality":"CFP"}` — **no grade, no confidence, no probabilities.**
+- ✅ A valid UWF upload returned `{"success":true,"message":"Image received","modality":"UWF"}` — same.
+- ✅ An invalid modality returned HTTP 400: `{"success":false,"error":{"code":"unsupported_modality","message":"Unsupported modality 'mri'. Allowed values: cfp, uwf."}}`
+
+`main.py:151-203` performs exactly five checks and nothing else:
+
+1. `modality` (trimmed, lowercased) is `cfp` or `uwf` → else **400 `unsupported_modality`**
+2. an `image` file field was actually sent, with a filename → else **400 `invalid_image`**
+3. the file is not empty → else **422 `invalid_image`**
+4. the file is ≤ `MAX_UPLOAD_BYTES` = **25 MB** → else **413 `image_too_large`**
+5. returns `PredictDevResponse`
+
+`main.py:166`: *"The image bytes are read only to check emptiness and size. They are not decoded, not preprocessed and not passed to any network."*
+
+`main.py:192` logs, on every request: `"POST /predict validated: modality=…, file=…, N bytes. Model NOT run (skeleton)."`
+
+**`inference/predictor.predict()` is never imported by `main.py`.** The working, verified model layer is not wired to the API. `main.py:22-24` states: *"`inference/` is left untouched: the CFP and UWF checkpoints on disk are not modified, read or executed by this file."*
+
+### 8.3 Also absent from the API
+
+| Missing | Evidence |
 |---|---|
-| valid modality `CFP` + **19 bytes of plain text (not an image at all)** | **HTTP 200** `{"success":true,"message":"Image received","modality":"CFP"}` |
-| modality `oct` | **HTTP 400** `{"success":false,"error":{"code":"unsupported_modality","message":"Unsupported modality 'oct'. Allowed values: cfp, uwf."}}` |
+| Any endpoint returning a prediction | `schemas/api.py:4-7` — prediction schemas `PredictionResultModel`, `PredictResponse`, `ModelsInfoResponse` are *"deliberately absent"* |
+| `GET /models` or model-status endpoint | `manager.describe()` exists in `model_loader.py:611` but is **never called by the API** |
+| Model preload / lifespan / startup hook | no `@app.on_event`, no lifespan context anywhere in `main.py` |
+| `/predict` returning `device`, `checkpoint`, `preprocessing` provenance | `PredictionResult.to_dict()` (`predictor.py:76`) builds it; no consumer |
+| Request timing / logging of inference | no such code |
+| `GET /preprocessing` | `describe_preprocessing()` (`preprocessing.py:229`) exists, unused |
+| Any Grad-CAM endpoint | ❌ no Grad-CAM code exists at all (§11) |
+| Any Gemini endpoint | ❌ no Gemini code exists at all (§11) |
+| Any history / PDF endpoint | ❌ `services/` is empty (§11) |
 
-The 200 response for non-image bytes is direct proof that the endpoint performs no decoding and no inference. Declared error mappings: `400` invalid modality, `422` missing/empty image, `413` image too large, plus the global `500` handler.
+### 8.4 Middleware and error handling — ✅ present and verified by reading
 
-### 10.2 Endpoints that do not exist
+- **CORS** (`main.py:91-99`): `allow_origins` = 8 fixed localhost origins (ports 8000/3000/5000/8080 on `localhost` and `127.0.0.1`); `allow_origin_regex` = `^http://(localhost|127\.0\.0\.1)(:\d+)?$` — enabled because `ALLOW_LOCALHOST_ANY_PORT = True`, so a Vite dev server on any port is permitted. `allow_credentials=True`, `allow_methods=["GET","POST","OPTIONS"]`, `allow_headers=["*"]`.
+- **Global exception handler** (`main.py:109-117`): logs the traceback server-side, returns a generic **500 `internal_error`** with no traceback leak to the client.
+- Error envelope is consistent: `{"success": false, "error": {"code", "message"}}` (`main.py:102-106`).
+- ✅ `inference/exceptions.py` exists with domain error classes, but ❌ they are **not mapped to HTTP status codes** — no exception handler translates `ModelNotFoundError` / `ArchitectureMismatchError` / `InvalidImageError` into responses.
 
-`GET /models` (per-modality load status), any prediction-returning `POST /predict` contract, Grad-CAM endpoints, report-generation endpoints, history/CRUD endpoints, authentication. `ModelManager.describe()` and `describe_preprocessing()` exist and are ready to back a `/models` endpoint, but nothing calls them today.
+### 8.5 API verdict
 
----
-
-## 11. Frontend Status
-
-**Status: a complete-looking, lint-clean, but entirely non-functional UI shell.** It is a static representation of the intended workflow, with every result field deliberately left empty.
-
-### 11.1 What exists
-
-- **Stack:** React 19 + TypeScript 5.9 + Vite 8 + Tailwind CSS 4; SPA with client-side view switching in `App.tsx` (no router library — `activeItem` is React state).
-- **Views:** `AnalyzePage` (primary workflow), `DashboardPage`, `ExplainabilityPage`, `ReportsPage`, plus `UnavailablePage` for **Screening History** and **Settings**.
-- **Shared state in `App.tsx`:** modality (`cfp`/`uwf`), selected file + local preview URL (`useImageSelection`), and `status: 'idle' | 'analyzed'`. Changing modality or image resets the result panels; state lives above the pages so switching to Explainability/Reports preserves the same capture.
-- **Reusable UI:** Card/Badge/Button/EmptyState/Placeholder/Skeleton/Notice/ProgressBar and a local icon set.
-- **Production build:** `frontend/dist/` exists with `index.html`, `retina.svg`, a 268,520 B JS bundle and a 35,183 B CSS bundle, and `node_modules/.tmp/*.tsbuildinfo` artifacts are present — i.e. `tsc -b` and `vite build` have been run successfully at some point.
-
-### 11.2 What is deliberately inert
-
-- **No API integration of any kind.** A full-text search of `frontend/src` for `fetch(`, `axios`, `XMLHttpRequest` returns **no matches**. `BACKEND_BASE_URL = 'http://127.0.0.1:8000'` exists as a constant in `data/clinical.ts:6` but is never used to make a request. The Analyze button simply flips `status` to `'analyzed'`.
-- **Every result field is `null`.** `types.ts:41-43` states `label`, `confidence` and `probabilities` are `null` until real inference is wired up and "are never faked".
-- `PredictionCard` renders `—` for grade and confidence and the fixed caption *"Inference is not connected in this build."*
-- `XaiPanel` has Original/Grad-CAM/Overlay tabs, but the Grad-CAM and Overlay tabs render an explicitly empty state: *"The heatmap is still empty: Grad-CAM is not implemented."* All Grad-CAM metadata fields (`Target layer`, `Alpha`, `Max activation`, `Upsample`) are `-`.
-- `AiReportCard` shows a Gemini generator panel whose "Generate report" and "Export PDF" buttons are hard-coded `disabled`, with the notice *"Report generation is not connected."*
-- `DashboardPage` shows four statistics with no data source and a "Recent Studies" empty state, under the banner *"All figures on this page are placeholders."*
-- Image handling is **local only** (drag-and-drop, `URL.createObjectURL` preview, client-side type/size validation mirroring the 25 MB cap). "Analyze Image" is `disabled` until a file is chosen.
-
-### 11.3 Verified quality state
-
-`npm run lint` (`eslint .`) → **exit code 0, no warnings or errors.**
-
-### 11.4 Status gaps
-
-- **The whole frontend is untracked in Git.** It is on disk but nothing is committed — a single `git clean` with the wrong flags would destroy it.
-- `frontend/node_modules/` and `frontend/dist/` are untracked **and not git-ignored**; `node_modules` should be added to `.gitignore`.
-- The README and `.gitignore` still describe a Flutter client that does not exist (§3.2).
-- `ProbabilityBars.tsx` and `UnavailablePage` routing exist; the app has no router, no error boundary and no state-management layer.
-- No frontend unit or component tests, and no test runner in `package.json`.
+**The service runs, and it is honestly labelled as a skeleton.** `main.py:1-31` and `main.py:86-88` both state that image prediction is NOT implemented. The gap between §7 (working inference) and §8 (skeleton API) is the single largest remaining piece of work (§12.1).
 
 ---
 
-## 12. What Is NOT Implemented Yet
+## 9. Frontend status
 
-Each item below was confirmed absent from the working tree. Nothing in this list is functional today.
+`frontend/` — 32 source files, React 19 + TypeScript 5.9 + Vite 8 + Tailwind 4.
 
-### 12.1 Inference
+### 9.1 Headline: ✅ a complete, polished, 100 % static UI shell with zero network I/O
 
-- **No endpoint performs image prediction.** `POST /predict` validates and returns a placeholder. `predictor.predict` is implemented but unreachable from the API.
-- **End-to-end inference has never been run.** No retinal image exists in the repository, so `test_prediction.py` reports `INFERENCE NOT TESTED`. There is no verified prediction, no verified softmax output, and the ten output-contract assertions are unexecuted.
-- **No accuracy, QWK, F1, AUC or confusion matrix has been produced by this project** — no evaluation script, no ground truth, no dataset.
-- **The CFP preprocessing input size is an unverified assumption** (224 vs the sibling's 512). Because EfficientNet-B0 is fully convolutional with global pooling, a wrong size fails *silently* — logits are still produced but accuracy would be untrustworthy. `preprocessing.py:31-38` and `test_prediction.py:197-204` both flag this explicitly, and `--image-size` exists to probe it.
-- **The 5-class label ordering is a project assumption**, not checkpoint data (§4.2).
+- ✅ **There is not a single network call in the entire frontend.** A grep across `frontend/src/**` for `fetch(`, `axios`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `sendBeacon`, `import.meta.env`, `VITE_` returns **no matches**.
+- `BACKEND_BASE_URL = 'http://127.0.0.1:8000'` is declared at `src/data/clinical.ts:6` but is **never used for a request** — it is imported once and rendered as a *text label* in `src/components/layout/SidebarContent.tsx:53`.
+- ✅ No Vite dev proxy: `vite.config.ts` is 12 lines with `server: { host: '127.0.0.1', port: 5173 }` and **no `server.proxy` block**. Even a future `fetch('/api/...')` would not reach the backend in dev without adding one.
+- ✅ The built bundle `dist/assets/index-D3fiBzDM.js` contains exactly one `fetch(` occurrence, and it is React DOM's internal resource preloader, not application code.
 
-### 12.2 Explainability
+### 9.2 What is real and working
 
-- **No Grad-CAM.** No activation hooks, no gradient capture, no target-layer selection, no heatmap rendering, no saliency or class-activation maps — in the backend or the frontend. `XaiPanel` is an empty shell.
+| Area | Detail |
+|---|---|
+| Shell | `AppShell` responsive sidebar + mobile drawer, scroll lock, Escape-to-close, skip link |
+| Navigation | 6 views (`analyze`, `dashboard`, `explainability`, `reports`, `history`, `settings`) via `useState` + ternaries in `App.tsx:49,86-121` |
+| File input | `ImageDropzone` — drag-and-drop, click, keyboard; `role="radiogroup"`/`aria-checked` on `ModalitySelector` |
+| Client validation | 5 accepted MIME types, **25 MB** max (`clinical.ts:9`), zero-byte reject (`useImageSelection.ts:66-71`) |
+| Object-URL hygiene | `URL.revokeObjectURL` on replace / clear / unmount (`useImageSelection.ts:26-34,73-76`) |
+| Preview | Local `blob:` URL rendering in `ImagePreview` |
+| Design system | Full Tailwind v4 token set (`index.css`), 6 `ui/` primitives, 1 icon module |
+| Honesty | Runtime notices on every page state that nothing is connected |
+| Build | ✅ `npm run typecheck` → **clean, 0 errors**; `node_modules` installed (121 packages) |
 
-### 12.3 Reporting and persistence
+### 9.3 What is placeholder
 
-- **No Gemini integration.** `google-genai` is not in `requirements.txt` and not installed; `GEMINI_API_KEY=` is empty in `.env`; `backend/services/` is empty. No prompt, no generated text, no `REPORT_META` values.
-- **No screening history and no database.** No storage layer, no ORM, no migration, no persistence of results.
-- **No PDF export.** `reportlab` is not installed; the "Export PDF" button is permanently disabled.
+| Surface | Evidence |
+|---|---|
+| **The entire "Analyze" action** | `App.tsx:73-75` — `handleAnalyze = () => setStatus('analyzed')`. That is the whole of it. `AnalyzePage.tsx:32-33` says so: *"`onAnalyze` only flips the panels from 'idle' to 'placeholder'. No request leaves the browser."* |
+| Predicted grade / confidence / probabilities | `AnalyzePage.tsx:136-147` passes `label={null} confidence={null}` and `probabilities={null} predictedIndex={null} probabilitySum={null}`; components render `—` |
+| No fake data anywhere ✅ | `types.ts:45-54` types `AnalysisRecord` fields as `| null` with the comment *"they are never faked"*. **There are no hardcoded grades, confidences or probabilities in the codebase.** Only class *names* are static (`clinical.ts:42-78`), and they are never rendered as a prediction. |
+| **Grad-CAM** | `XaiPanel.tsx:26-31` `GRAD_CAM_META` values are all `'-'`; `:95-110` the `gradcam` and `overlay` views render an animated dashed circle captioned *"Grad-CAM is not implemented"*; `:33-38` comments admit *"no activation hook, no gradient capture, no heatmap rendering happens anywhere in this build"*; saliency map, class activation map, attention consensus all `'-'`; the summary is 3 `<Skeleton>` bars. `ExplainabilityPage.tsx` is a 26-line pass-through to `XaiPanel`. |
+| **AI report / Gemini** | `AiReportCard.tsx:23-28` `REPORT_META` has `Generator: 'Gemini'` as a **hardcoded display string only**; the body is shimmer skeletons, not fake prose; `:138-143` the "Generate report" and "Export PDF" buttons are **permanently `disabled`**; the badge reads `'Awaiting generation'` even after analyzing. **Zero Gemini API integration.** |
+| Dashboard KPIs | 4 tiles all `'-'`; Model Status shows both modalities as `Not loaded` |
+| History, Settings | `UnavailablePage` with static roadmap bullet lists |
+| Inference timing | `PredictionCard.tsx:87` hardcoded `—` |
+| `PredictionStatus` | `types.ts:39` has only `'idle' \| 'analyzed'` — no `'loading'`, no `'error'`, no `'done'` |
+| `AnalysisRecord` | declared at `types.ts:45`, **referenced nowhere** |
 
-### 12.4 Backend and integration gaps
+### 9.4 Structural gaps that will block integration
 
-- `GET /models` removed and not reinstated; no endpoint reports model load status, DR class list or effective preprocessing.
-- No `InferenceError` → HTTP mapping (domain exceptions define `code`/`http_status` but nothing consumes them).
-- No request logging, no rate limiting, no authentication, no multi-user support, no CORS beyond localhost.
-- No real image decoding in the upload path, so content-type/format rejection happens only in the unused `preprocessing` layer.
-
-### 12.5 Quality, testing and documentation
-
-- **No automated test suite.** `pytest` and `httpx` are not installed, there is no `tests/*.py`, no test config, and `tests/` contains only `.gitkeep`. The verification scripts are hand-run CLIs with exit codes, not a test runner.
-- **No CI configuration** of any kind (no `.github/`, no pipeline).
-- **No linting or type-checking for Python** — no `ruff`, `flake8`, `mypy` or `black` config anywhere.
-- `docs/` is empty; no architecture document, no dataset description, no API contract document, no setup guide beyond the outdated README.
-- **README is stale** in three ways: Flutter frontend, obsolete checkpoint names (`efficient_cfp.pt` / `efficient_uwf.pt` instead of `EfficientNetB0_CFP_final.pth` / `EfficientNetB0_UWF_final.pt`, as `clinical.ts:146` notes), and a status checklist that still marks model loading as unfinished.
-- **Uncommitted work at rest:** the modified `main.py`/`schemas/api.py` and the entire untracked frontend are not preserved in Git history.
-
----
-
-## 13. Current Development Workflow
-
-### 13.1 Backend
-
-```powershell
-cd backend
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt     # CPU wheels via --extra-index-url
-.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
-# interactive OpenAPI docs at http://127.0.0.1:8000/docs
-```
-
-### 13.2 Verification scripts (all read-only; none writes a file)
-
-| Command (from `backend/`) | Purpose | Verified result |
+| # | Gap | Location |
 |---|---|---|
-| `python -m inference.inspect_models` | Read-only checkpoint forensics: types, key prefixes, shapes, head layout, class count | exit 0; `file unchanged by read: True` for both |
-| `python -m inference.verify_architecture` | Architecture ↔ checkpoint name/shape/order comparison, no weights loaded | exit 0 |
-| `python -m inference.verify_architecture --strict-load` | Adds the real `strict=True` load as final proof | exit 0; *"All keys matched successfully"* for both |
-| `python -m inference.test_model_loading` | `ModelManager` end-to-end: CPU placement, eval mode, strict load, head widths | **exit 0**, *"Any error: none"* |
-| `python test_models.py` | Human-readable model report; `--image` optional | exit 0; `RESULT: CFP=OK  UWF=OK`; *"No --image supplied: image inference NOT tested."* |
-| `python test_prediction.py --image <path> --modality cfp\|uwf [--image-size N] [--json]` | Real-image inference + 10 output-contract assertions | **cannot pass yet** — no image in repo; exits non-zero with `INFERENCE NOT TESTED` |
+| 1 | No HTTP client and no API layer at all | `frontend/src/**` |
+| 2 | No `server.proxy` in the Vite config | `vite.config.ts` |
+| 3 | No `'loading'` / `'error'` states in the status union | `types.ts:39` |
+| 4 | No router — no URLs, no deep-linking, no back/forward, state lost on refresh | `App.tsx:49` |
+| 5 | Grad-CAM needs a real image-compositing path; today only the `original` view renders an `<img>` | `XaiPanel.tsx:87-110` |
+| 6 | `MODEL_FILE_NAMES` is duplicated in the frontend and must be kept in sync by hand with `model_loader.py::MODEL_SPECS` | `clinical.ts:148-151` |
+| 7 | No frontend test tooling of any kind | `package.json:7-13` |
+| 8 | `dist/` is tracked in git despite `.gitignore:23` | `git ls-files frontend/dist` → 4 files |
 
-### 13.3 Frontend
-
-```powershell
-cd frontend
-npm install
-npm run dev        # vite dev server on 127.0.0.1:5173
-npm run lint       # eslint .            -> verified exit 0
-npm run typecheck  # tsc -b --noEmit
-npm run build      # tsc -b && vite build
-npm run preview
-```
-
-### 13.4 Working practices observed in the codebase
-
-- **Evidence-first engineering:** every module docstring cites the checkpoint evidence for its constants (`model_architecture.py`, `preprocessing.py`, `model_loader.py`), and assumptions are labelled as assumptions at the point of use.
-- **Fail loudly, never silently:** `strict=True` is never relaxed; architecture is never bent to fit a checkpoint; auxiliary heads are never named; stale config fields are documented rather than trusted.
-- **CPU-only is enforced in code**, not merely documented (§8.4).
-- **Nothing invents a result:** missing images, unverified preprocessing and absent datasets produce explicit "NOT TESTED" / warning messages instead of plausible-looking output.
-- **Layered separation:** architecture → loading → preprocessing → prediction → API, with each verification concern in its own CLI script.
-
-### 13.5 Git workflow as it actually stands
-
-6 commits: `first commit` → `set backend and cpu only pytourch set up` → `Model Checkpoint Inspect` → `architecture reconstruction` ×2 → `prepar for prediction`. Current state: 24 tracked files; `backend/main.py` and `backend/schemas/api.py` modified but uncommitted; the entire `frontend/` untracked; model checkpoints correctly git-ignored (`backend/models/*` with `!backend/models/.gitkeep`).
+✅ One point of good news on #6: `clinical.ts:148-150` lists `EfficientNetB0_CFP_final.pth` and `EfficientNetB0_UWF_final.pt`, which **matches** `model_loader.py:81-82` exactly.
 
 ---
 
-## 14. Next Planned Steps
+## 10. What is currently working
 
-Ordered by dependency. Items marked *(inferred)* are implied by existing placeholders — `services/__init__.py`, `GEMINI_API_KEY` in `.env`, the README checklist and the disabled UI buttons — not by any specification document.
+Everything below was reproduced in this session.
 
-### Immediate — close the correctness gaps
+### 10.1 Model layer — ✅ complete and verified
 
-1. **Resolve the CFP input size.** Run `test_prediction.py --image-size 224` and `--image-size 512` on the same real CFP image and compare output stability; then confirm against the original training script. Until then, CFP preprocessing stays flagged `verified=False`.
-2. **Confirm the 5-class label ordering** from the training script or dataset metadata. Highest priority: a wrong order silently produces clinically inverted output.
-3. **Obtain a small set of real, consented CFP and UWF test images** (no synthetic images) and run `test_prediction.py` to close the inference-verification gap. Do not report predictions before this passes.
-4. **Commit the current working tree**, or explicitly decide to reinstate the inference-wired API from commit `759dc60`. Leaving the frontend untracked is the single largest data-loss risk in the repository.
+1. **Both checkpoints inspected read-only** without mutation. `inspect_models.py` reports `file unchanged by read: True` for both. Type, top-level keys, tensor count, dtypes, devices, conv shapes, head leaves and class count all extracted directly from the files.
+2. **Both architectures reconstructed exactly** from the checkpoint keys, with a documented argument for torchvision-over-timm. `verify_architecture.py` returns `EXACT MATCH` for both: names, shapes and **key order** identical; 0 missing, 0 unexpected, 0 shape mismatches.
+3. **Both checkpoints load with `strict=True`** and zero diff — CFP 374 tensors, UWF 360 tensors. `strict=False` appears nowhere in the project.
+4. **Head layouts auto-detected** from the state_dict keys (`model_loader.py:273`), not hardcoded per modality, and cross-checked against the registered spec.
+5. **Both models in `eval()` mode with every parameter *and* buffer on CPU.**
+6. **CPU-only enforcement** on five independent layers (load, placement, forward probe, runtime assertion, payload field) — §5.
+7. **A `ModelManager`** that loads each modality exactly once behind a `threading.Lock`, keeps CFP and UWF fully separate, and never silently falls back from one modality to the other (`model_loader.py:554-628`).
+8. **Typed domain errors** — `ModelNotFoundError`, `CheckpointLoadError`, `ArchitectureMismatchError`, `UnsupportedModalityError`, `InvalidImageError`, `InferenceFailedError`.
 
-### Near term — wire the product together
+### 10.2 Inference layer — ✅ works end-to-end
 
-5. **Reinstate real inference on the API** *(inferred)*: add `POST /predict` calling `predictor.predict`, map `InferenceError` subclasses to their `http_status`/`code`, restore the lifespan model preload, restore the prediction response schemas, and re-add `GET /models` using the existing `ModelManager.describe()` and `describe_preprocessing()`.
-6. **Connect the frontend to the API** *(inferred)*: an API client module using the already-declared `BACKEND_BASE_URL`, upload with progress, render real grade / confidence / probabilities into the existing `null` fields, and replace the "Model Status: Not loaded" badges with live status.
-7. **Add a Python test suite** *(inferred)*: `pytest` + `httpx`, a `TestClient` suite over the three endpoints, plus regression tests for `predictor.verify_result`'s ten output-contract assertions using a fixed real image.
+9. **Real-image prediction runs on real images for both modalities on CPU.** CFP `tr000001.jpg` → Moderate 70.31 %; UWF `tr000001.jpg` → Mild 88.18 %.
+10. **The output contract is machine-asserted, 10/10 PASS on both** — 5 probabilities, keys matching the class map, all in [0,1], Σ ≈ 1 within 1e-4, argmax consistency, confidence = max, label = index, `device == "cpu"`, CUDA unused.
+11. **A well-defined, documented 5-class ICDR mapping** with `key` and `label` deliberately identical so they cannot drift apart (`predictor.py:42-42`).
+12. **`predict()` refuses to guess**: if the model emits a class count other than 5, it raises rather than mapping anyway (`predictor.py:132-136`).
+13. **Preprocessing provenance is carried in the output.** Every payload embeds a `preprocessing` block with `normalization_source`, `config_source` and `values_verified_by_checkpoint` — the CFP assumption is machine-visible in the JSON, not just in a comment.
+14. **Unnamed auxiliary heads are quarantined** — returned only on explicit request, always as `aux_head_N`, always with a disclaimer.
+15. **Decode robustness** — format whitelist, EXIF transpose, RGB conversion, specific errors for empty/corrupt/unsupported input.
+16. **An override path for the assumed CFP size** (`--image-size`) that always clears the `verified` flag.
 
-### Medium term — feature completion
+### 10.3 Service layer
 
-8. **Grad-CAM** *(inferred)*: activation/gradient hooks on the final EfficientNet stage (`features.8`), per-class heatmaps, and endpoints returning overlay images to the existing `XaiPanel` tabs.
-9. **Gemini report generation** *(inferred)*: install `google-genai`, add a service under `backend/services/`, prompt from the prediction payload only (never from raw auxiliary head outputs), and populate `AiReportCard`'s `REPORT_META` fields.
-10. **Screening history and PDF export** *(inferred)*: persistence layer plus `reportlab`, replacing the `UnavailablePage` for History and enabling the Export button.
-11. **Dataset and evaluation work for MMRDR** *(inferred from the project brief)*: locate and document the actual dataset, record the true label encoding, and build an evaluation harness so that QWK/macro-F1 can be reproduced on this hardware rather than quoted from checkpoint metadata.
+17. **The FastAPI app starts and serves.** `/`, `/health`, `/predict` all respond; `/openapi.json` and `/docs` work.
+18. **Real request validation with correct status codes** — 400 / 422 / 413, all reproduced live.
+19. **CORS configured** for a localhost dev workflow including any Vite port.
+20. **A global exception handler** that never leaks a traceback to a client.
 
-### Housekeeping
+### 10.4 Frontend
 
-12. Update `README.md`: React frontend (not Flutter), real checkpoint filenames, current status checklist, and a link to this report.
-13. Extend `.gitignore` with `node_modules/`, `dist/` and coverage output; add a `frontend/dist` build-artifact decision.
-14. Add Python quality tooling (`ruff`, `mypy`) and CI running the backend verification scripts plus `npm run lint` / `typecheck` / `build`.
-15. Populate `docs/` with the architecture note, the API contract and the dataset description.
+21. **A complete, responsive, accessible UI shell** — 32 files, 6 views, sidebar + drawer, skip link, ARIA-correct controls.
+22. **A working, validated file-selection flow** with drag-and-drop, click and keyboard paths, MIME + 25 MB + zero-byte rules, and correct object-URL lifecycle.
+23. **Clean TypeScript** — `tsc -b --noEmit` exits with 0 errors.
+24. **A production build exists** in `frontend/dist/` and is newer than the newest source file.
+25. **Radical honesty in the UI** — every placeholder is labelled as one, and **no mock prediction data exists anywhere in the codebase.**
 
 ---
 
-## Appendix A — Verification Evidence
+## 11. What is NOT implemented
 
-All commands were run from `F:\retinagrade-ai\backend` (frontend lint from `F:\retinagrade-ai\frontend`) using `.\.venv\Scripts\python.exe` / `npm`. **No source file was modified in the course of preparing this report.**
+| # | Feature | Status | Proof |
+|---|---|---|---|
+| 1 | **API-side inference** — `POST /predict` running a model | ❌ **NOT IMPLEMENTED** | `main.py:151-203` validates only; returns `{"success":true,"message":"Image received"}`; `predictor` never imported by `main.py` |
+| 2 | **Any prediction response schema** | ❌ **NOT IMPLEMENTED** | `schemas/api.py:4-7` — deliberately absent; only `RootResponse`, `HealthResponse`, `PredictDevResponse`, `ErrorResponse` exist |
+| 3 | **Grad-CAM / saliency / class activation maps** | ❌ **NOT IMPLEMENTED** | Zero backend code. A repo-wide grep for `gradcam|grad-cam|grad_cam|GradCAM` finds only frontend placeholder strings. `XaiPanel.tsx:33-38` admits no activation hook, no gradient capture, no heatmap |
+| 4 | **Gemini report generation** | ❌ **NOT IMPLEMENTED** | Zero backend code. `google-genai` not installed (`requirements.txt:28`); `GEMINI_API_KEY` in `.env` is never loaded (`load_dotenv` never called); "Gemini" in the frontend is a display string at `AiReportCard.tsx:24` |
+| 5 | **PDF export** | ❌ **NOT IMPLEMENTED** | `reportlab` not installed (`requirements.txt:29`); `services/` is empty; the frontend "Export PDF" button is `disabled` (`AiReportCard.tsx:138-143`) |
+| 6 | **Screening history / persistence** | ❌ **NOT IMPLEMENTED** | `services/__init__.py` is 0 bytes; no database, no store, no file writer; the frontend History nav item is `implemented: false` (`clinical.ts:138`) and routes to `UnavailablePage` |
+| 7 | **Frontend ↔ backend integration** | ❌ **NOT IMPLEMENTED** | Zero network calls in `frontend/src`; no HTTP client dependency; no Vite proxy; `BACKEND_BASE_URL` is a text label only |
+| 8 | **Model preload / warm-up in the API** | ❌ **NOT IMPLEMENTED** | No startup or lifespan hook in `main.py`; `manager` and `manager.describe()` are never called from the API |
+| 9 | **`GET /models` model-status endpoint** | ❌ **NOT IMPLEMENTED** | `LoadedModel.describe()` and `ModelManager.describe()` exist in `model_loader.py` but have no HTTP route |
+| 10 | **Automated test suite** | ❌ **NOT IMPLEMENTED** | `pytest`/`httpx` commented out (`requirements.txt:30`); `tests/` holds only `.gitkeep`; the four `test_*.py` files are CLI scripts, not a suite; no CI config; frontend has no test tooling |
+| 11 | **Training code, dataset pipeline, evaluation harness** | ❌ **OUT OF SCOPE / ABSENT** | No such files exist. The repo consumes checkpoints only. **No accuracy, QWK, sensitivity or specificity has been measured here** |
+| 12 | **Dataset ground-truth labels** | ❌ **ABSENT** | `test_images/` holds 2 unlabelled JPEGs. Accuracy metrics are therefore impossible from this repository |
+| 13 | **Frontend routing** | ❌ **NOT IMPLEMENTED** | No `react-router`; `useState` + ternaries (`App.tsx:49,86-121`) |
+| 14 | **Frontend loading / error states** | ❌ **NOT IMPLEMENTED** | `PredictionStatus = 'idle' \| 'analyzed'` only (`types.ts:39`) |
+| 15 | **Settings view** | ❌ **NOT IMPLEMENTED** | `clinical.ts:140` `implemented: false`; renders `UnavailablePage` |
+| 16 | **The 7 CFP auxiliary lesion heads** | ⚠️ **MEANING UNKNOWN** | Count verified (7); no label map in the checkpoint. Cannot be named as clinical findings — `model_architecture.py:59-61` |
+| 17 | **A verified CFP input size** | ⚠️ **UNVERIFIED** | The CFP checkpoint has no `config` key at all. 224 is an assumption; the sibling model used 512 |
+| 18 | **A verified class-index → grade map** | ⚠️ **INFERRED** | Neither checkpoint stores a label map. The ICDR ordering in `predictor.py:46-52` is a documented, reasonable inference, not file-proven |
+| 19 | **Auth, rate limiting, request IDs, structured logging** | ❌ **NOT IMPLEMENTED** | No code in `main.py` |
+| 20 | **Deployment config** | ❌ **NOT IMPLEMENTED** | No Dockerfile, no `docker-compose`, no CI workflow, no reverse-proxy or process-manager config |
 
-| # | Command | Result |
+---
+
+## 12. Next development steps
+
+Ordered by dependency. Steps 1–3 are the critical path from "model layer works" to "product works".
+
+### 12.1 🔴 P0 — Wire the working model layer into the API
+
+**Why first:** the hardest, riskiest part of this project is already done and verified (§7). The API is a validated-request shell that throws the result away. This step converts a working engine into a working service.
+
+1. Add a FastAPI lifespan/startup hook that calls `manager.load_all()` once and logs per-modality status.
+2. Add real prediction response schemas to `schemas/api.py` — `PredictResponse`, `PredictionResultModel`, `ModelsInfoResponse` — mirroring `PredictionResult.to_dict()` (`predictor.py:76-103`) field for field.
+3. Replace the placeholder body of `POST /predict` with a call to `inference.predictor.predict(...)`.
+4. **Map `inference/exceptions.py` to HTTP status codes** via exception handlers: `UnsupportedModalityError` → 400, `InvalidImageError` → 422, `ModelNotFoundError` → 503, `ArchitectureMismatchError` / `CheckpointLoadError` → 500 with a server-side-only detail.
+5. Add `GET /models` returning `manager.describe()`, and `GET /preprocessing` returning `describe_preprocessing()`.
+6. **Pass through the `preprocessing` provenance block in the response** so an API consumer sees `values_verified_by_checkpoint: false` for CFP instead of having to trust a docstring.
+7. Add an integration test that POSTs a real `test_images/cfp/tr000001.jpg` and asserts the response equals the §7.1 contract. Requires installing `pytest` + `httpx` (`requirements.txt:30`).
+
+### 12.2 🔴 P0 — Resolve the CFP preprocessing assumption
+
+**Why:** the CFP confidence figure is currently uninterpretable (§6.2, §7.4.2). This is a correctness issue, not a polish item.
+
+1. **Recover the true CFP training resolution from an external source** — the training script or its logs. `EfficientNetB0_CFP_final.pth` cannot tell us: it has no `config`.
+2. Sweep the size empirically: run `test_prediction.py --image-size {224, 256, 320, 384, 448, 512}` over a labelled set and pick the size that maximises QWK against ground truth. Record the result.
+3. Once a size is confirmed by evidence, set `DEFAULT_IMAGE_SIZE` and flip `_DEFAULTS["cfp"]["verified"]` to `True` with a `source` string that names the evidence. **Do not flip the flag without evidence** — the flag is the mechanism that keeps this honest.
+4. Independently confirm the CFP normalization is ImageNet (the current justification is only "the sibling UWF run used it").
+5. **Fix the stale UWF `config` fields** — `experiment` and `dataset` both say CFP. Ask the training owner to correct them, or document them as known-bad in `model_loader.py::_extract_metadata` so a future reader is not misled.
+
+### 12.3 🟠 P1 — Obtain ground truth and measure performance
+
+**Why:** `n = 1` per modality (§7.4.1) proves nothing. No accuracy claim in this project is currently supportable.
+
+1. Source labelled CFP and UWF validation sets with ICDR ground truth. **This is an external dependency and the main schedule risk.**
+2. Add a dataset loader and an evaluation script computing per-modality: accuracy, macro-F1, quadratic weighted kappa (the checkpoints were selected on QWK), a confusion matrix, and per-class sensitivity/specificity.
+3. Compare measured QWK against the training-time values (CFP `0.9226`, UWF `0.9153`). A large shortfall would point at the preprocessing pipeline.
+4. Report results **separately per modality**. Never compare CFP and UWF predictions on different images.
+
+### 12.4 🟠 P1 — Connect the frontend
+
+1. Add an HTTP client. Decide between `fetch` and a small wrapper; keep it in one module.
+2. Add `server.proxy` in `vite.config.ts` to forward `/api` → `http://127.0.0.1:8000`, and use relative URLs in the frontend. The backend CORS already permits any localhost port, but a proxy removes the class of problem entirely.
+3. **Extend `PredictionStatus`** to `'idle' | 'loading' | 'analyzed' | 'error'` (`types.ts:39`) *before* wiring the call.
+4. Replace `handleAnalyze` (`App.tsx:73-75`) with a real `POST /predict` using `FormData` with `image` and `modality`.
+5. Wire `PredictionCard`, `ProbabilityCard` and `ProbabilityBars` to the real response. These components are already built and already accept the right props — they are currently handed `null`.
+6. Add a `GET /models` call so the Dashboard "Model Status" tiles stop reading `Not loaded`.
+7. Add abort/timeouts and surface backend error envelopes in the UI.
+8. **Keep `MODEL_FILE_NAMES` in sync** with `model_loader.py::MODEL_SPECS` (`clinical.ts:146-151`) — preferably generate it rather than duplicating it.
+9. Add a router. Manual `useState` navigation loses state on refresh and supports no deep links.
+
+### 12.5 🟡 P2 — Grad-CAM explainability
+
+1. Backend first, before the UI. Nothing exists today.
+2. Choose and document the target layer — for EfficientNet-B0 the conventional choice is the last MBConv block before pooling (`features.8`), not the classifier.
+3. Implement forward + backward hooks, weight activations by the DR-class gradient, ReLU, upsample, and a colormap overlay composited against the **original** image.
+4. The model runs in `eval()` under `torch.no_grad()` (`model_loader.py:451`, `predictor.py:199`). Grad-CAM **requires gradients**, so a separate `requires_grad_(True)` path on a cloned model is needed. **This is the main technical trap in this step** — do not remove `no_grad()` from the production prediction path.
+5. Choose a target resolution and **re-apply the correct per-modality preprocessing to the overlay base image** (512 for UWF, the resolved CFP size). Render the heatmap at the source resolution, not the network input resolution.
+6. Add `GET /predict/gradcam` or extend `POST /predict` with `include_gradcam`.
+7. Frontend: give `XaiPanel` a real overlay path. Today only the `original` view renders an `<img>` (`XaiPanel.tsx:87-110`).
+
+### 12.6 🟡 P2 — Gemini report generation
+
+1. Install `google-genai` (uncomment `requirements.txt:28`).
+2. **Call `load_dotenv()`** so `backend/.env` is actually read — this is currently missing project-wide (§2.1), and `GEMINI_API_KEY` is inert without it.
+3. Implement the client in `services/` (the package exists and is empty).
+4. **Prompt design is the safety-critical part.** The report must be grounded in the actual prediction — grade, confidence, the full probability vector, the verified preprocessing provenance. It must state model limitations and must not present the model output as a diagnosis.
+5. ⚠️ **Carry the `verified` flag into the prompt and the output.** A report generated from an assumed CFP input size must say so. A polished clinical-sounding paragraph built on a 224-vs-512 guess is the worst failure mode this project has.
+6. **Do not name the auxiliary lesion heads** (§3.6) — a generative model will happily invent plausible-sounding lesion names for 7 unlabeled logits.
+7. Add `POST /report`.
+8. Frontend: enable the currently-`disabled` buttons in `AiReportCard`.
+
+### 12.7 🟡 P2 — Screening history and PDF export
+
+1. Install `reportlab` (`requirements.txt:29`).
+2. Choose and justify a store. Nothing exists; `services/` is empty.
+3. Define a record schema. `AnalysisRecord` at `frontend/src/types.ts:45` is a reasonable starting shape but is currently unused and frontend-only.
+4. Persist: image reference, modality, label, confidence, full probability vector, checkpoint name, **preprocessing provenance including `verified`**, model version, timestamp, device.
+5. Add `GET /history` and `POST /report/pdf`.
+6. Frontend: replace `UnavailablePage` for the History nav item.
+7. Add patient-data handling policy — PHI in filenames, retention, access control. Decide before storing anything.
+
+### 12.8 🟢 P3 — Repository hygiene
+
+1. **Untrack `frontend/dist/`.** ✅ Confirmed: `git ls-files frontend/dist` returns 4 files while `.gitignore:23` lists `dist/`. The rule was added after the files were staged, and `.gitignore` does not apply retroactively to tracked files. Fix with `git rm -r --cached frontend/dist`.
+2. Drop or use `opencv-python`. It is installed, pinned at `5.0.0.93`, and **never imported** — pure install weight.
+3. Actually use `python-dotenv`, or drop it (§12.6.2).
+4. Add `pytest` + `httpx` and convert the four CLI scripts into a real suite. Keep the scripts — they are excellent diagnostic tools — but add assertions that can run unattended.
+5. Add a CI workflow running `tsc -b --noEmit`, `eslint .`, and the Python verification scripts.
+6. Add `docs/`. It contains only `.gitkeep`.
+7. Reconcile the two parameter-count figures used across the repo (`4,022,920` vs `4,064,985`). Both are correct; label them explicitly so future readers do not read them as a bug (§3.5).
+
+### 12.9 🟢 P3 — Documentation
+
+1. **Fix `README.md`.** It is stale in ways that actively mislead:
+   - *"Frontend: Flutter (desktop + mobile) - not created yet"* and *"`frontend/`: # Flutter app (not created yet)"* — the frontend is React + TypeScript + Vite + Tailwind and exists with 32 source files.
+   - *"Models: EfficientNet - `efficient_cfp.pt` … `efficient_uwf.pt`"* and *"place `efficient_cfp.pt` and `efficient_uwf.pt` in `backend/models/` manually"* — the real filenames are `EfficientNetB0_CFP_final.pth` and `EfficientNetB0_UWF_final.pt`. The frontend already caught this drift (`clinical.ts:146`).
+   - `- [ ] Model loading & inference (CFP / UWF)` — both are now complete and verified (§3, §4, §7).
+   - `backend/services/` and `backend/utils/` are described as if populated; both are empty.
+2. Add a document recording the **ground-truth provenance of the checkpoints** — who trained them, from which dataset, with which labels, and the true CFP image size. This is the missing input for §12.2 and §12.3, and it is not derivable from the repository.
+
+---
+
+## Appendix A — Commands executed for this report
+
+Every quantitative claim above traces to one of these. None modified any source file.
+
+| ID | Command (from `backend/` unless noted) | Purpose |
 |---|---|---|
-| A.1 | Recursive file inventory (`Get-ChildItem -Recurse`, excluding `.git`, `node_modules`, `dist`, `__pycache__`) | 69 project files; 2 checkpoints (16,408,231 B / 48,652,882 B) |
-| A.2 | `git log --oneline`, `git status --short`, `git ls-files` | 6 commits; 24 tracked files; `main.py` + `schemas/api.py` modified; `frontend/` untracked |
-| A.3 | `git diff backend/main.py backend/schemas/api.py` | Confirms the uncommitted rollback from the inference-wired `0.2.0` API to the `0.3.0-dev` skeleton |
-| A.4 | `python -c "import ...; print(torch.__version__, torch.cuda.is_available())"` | Python 3.10.11, torch 2.14.0+cpu, torchvision 0.29.0+cpu, fastapi 0.141.1, pillow 12.3.0, numpy 2.2.6, cv2 5.0.0, **`cuda_available = False`** |
-| A.5 | `python -m inference.inspect_models` | exit 0 — full checkpoint forensics for both files (§5, §4.1); `file unchanged by read: True` |
-| A.6 | `python -m inference.verify_architecture --strict-load` | exit 0 — EXACT MATCH for both; 0 missing / 0 unexpected / 0 shape mismatches; strict load OK |
-| A.7 | `python -m inference.test_model_loading` | **exit 0** — both loaded, cpu, eval, `strict=True`, 0 missing/unexpected; *"Any error: none"* |
-| A.8 | `python test_models.py` | exit 0 — `RESULT: CFP=OK  UWF=OK`; `Parameters: 4,022,920 / 4,013,953`; `epoch=12/7`; `best_qwk=0.92257 / 0.91525`; *"image inference NOT tested"* |
-| A.9 | `python -m pip list` | No CUDA packages, no `google-genai`, no `reportlab`, no `pytest`, no `httpx` |
-| A.10 | `torch.load(...)` dump of both checkpoints' metadata | CFP top-level keys / 12-row history; UWF 27-key `config`, 9-key `history` for epochs 1–7 (§4.1, §5) |
-| A.11 | `uvicorn main:app` started; `GET /`, `GET /health`, `GET /openapi.json` | 200 / 200 / 200; paths `/`, `/health`, `/predict`; version `0.3.0-dev`; no model loaded |
-| A.12 | `curl -F image=@<19-byte text file> -F modality=CFP` → `POST /predict` | **HTTP 200** `{"success":true,"message":"Image received","modality":"CFP"}` → proof that no decoding or inference occurs |
-| A.13 | `curl -F image=@<file> -F modality=oct` → `POST /predict` | **HTTP 400** `unsupported_modality` |
-| A.14 | `npm run lint` (frontend) | **exit 0** — no errors, no warnings |
-| A.15 | Full-text search for `MMRDR`, `Messidor`, `IDDr`, `DeepDR`, `APTOS`, `Kaggle`, `dataset used` | **No matches** anywhere in the project |
-| A.16 | Full-text search of `frontend/src` for `fetch(`, `axios`, `XMLHttpRequest`, `EventSource` | **No matches** → no API integration |
-| A.17 | Inventory of `frontend/dist`, `*.tsbuildinfo`, `tests/`, `docs/`, `backend/services/`, `backend/utils/` | Prior production build present; `tests/`, `docs/`, `services/`, `utils/` contain only `.gitkeep` / empty `__init__.py` |
+| **A1** | `.\.venv\Scripts\python.exe inference\inspect_models.py` | Read-only checkpoint inspection: type, top-level keys, tensor counts, dtypes, devices, conv shapes, head leaves, class counts, `file unchanged by read` |
+| **A2** | `.\.venv\Scripts\python.exe inference\verify_architecture.py` | Architecture ↔ checkpoint comparison; `EXACT MATCH` verdicts; timm ruled out; key spot-checks |
+| **A3** | `.\.venv\Scripts\python.exe -m inference.test_model_loading` | `strict=True` weight loading, eval mode, CPU placement of parameters **and** buffers, CPU-only assertion |
+| **A4** | `.\.venv\Scripts\python.exe test_models.py` | Per-modality checkpoint facts, effective preprocessing, CUDA check, `RESULT: CFP=OK UWF=OK` |
+| **A5** | `.\.venv\Scripts\python.exe test_prediction.py --image "test_images\cfp\tr000001.jpg" --modality cfp`<br>`.\.venv\Scripts\python.exe test_prediction.py --image "test_images\uwf\tr000001.jpg" --modality uwf` | **The §7 prediction results**, plus the 10-assertion output contract |
+| **A6** | `uvicorn main:app --host 127.0.0.1 --port 8000`, then `GET /`, `GET /health`, `GET /openapi.json`, `POST /predict` (cfp, uwf, and an invalid `mri` modality) | §8 — live endpoint behaviour and the validation-only payload |
+| **A7** | `.\.venv\Scripts\python.exe -c "…"` (temp script, since deleted) | Dumped the full 27-key UWF `config`, the CFP `history[0]` fields, and reconciled the parameter counts by direct summation |
+| **A8** | Pillow open of both test images; `Get-FileHash -Algorithm SHA256` on both | Image dimensions, modes and SHA-256, proving the two `tr000001.jpg` files are **different images** |
+| **A9** | `npm run typecheck` (in `frontend/`) | TypeScript build check — exits clean |
+| **A10** | Grep of `frontend/src/**` for `fetch(`, `axios`, `XMLHttpRequest`, `WebSocket`, `import.meta.env` | Proves **zero** network calls |
+| **A11** | Grep of `backend/**/*.py` for `import cv2`, `load_dotenv`, `gradcam\|gemini\|genai\|reportlab` | Proves opencv and dotenv are unused, and that no Grad-CAM / Gemini / PDF code exists |
+| **A12** | `git log --oneline`, `git status --short`, `git ls-files frontend/dist`, `Test-Path frontend\node_modules` | 7 commits, HEAD `b093fde`, clean tree, `dist/` tracked, `node_modules` installed |
 
-### Verified-fact summary
-
-- **CFP:** EfficientNet-B0 trunk (358 `features.*` tensors) + `dr_head` = `nn.Linear(1280 → 5)` + 7 unnamed binary heads `nn.Linear(1280 → 1)`; 374 checkpoint tensors; 4,022,920 parameters; `epoch 12`, `best_val_qwk 0.9225706931411989`; loads with `strict=True`, 0 missing / 0 unexpected keys; on CPU, eval mode.
-- **UWF:** torchvision `efficientnet_b0(num_classes=5)` — trunk + `classifier = Sequential(Dropout(0.2), Linear(1280 → 5))`; 360 checkpoint tensors; 4,013,953 parameters; `epoch 7`, `best_qwk 0.9152520275167323`, `image_size 512`, `normalization 'ImageNet mean/std'`; loads with `strict=True`, 0 missing / 0 unexpected keys; on CPU, eval mode.
-- **CPU:** `torch.cuda.is_available() = False`, `torch.version.cuda = None`, torch `2.14.0+cpu` / torchvision `0.29.0+cpu`; 0 parameters off CPU in either model; API hard-coded to `device="cpu"`; live `/health` reports `cuda_available: false`.
-- **Strict weight loading:** successful for **both** models, 0 missing and 0 unexpected keys each, verified twice — once by `verify_architecture --strict-load` and once by `test_model_loading`.
-- **Not verified:** any prediction, Grad-CAM, Gemini output, dataset metrics or working UI result.
+**Note on A6:** a uvicorn instance was already listening on `127.0.0.1:8000` when the probe began, so the probe's own launch attempt failed to bind (`Errno 10048`) and the responses came from the already-running instance of the same `main:app`. That instance was left running; the two temporary log files created during the probe were deleted and `git status` is clean.
 
 ---
 
-*Prepared for project review. All statements are traceable to the repository contents or to the executed commands in Appendix A. Where evidence was absent, the report records the absence rather than filling the gap.*
+## Appendix B — One-line status per subsystem
+
+| Subsystem | Status |
+|---|---|
+| Checkpoint inspection | ✅ Complete, verified, read-only |
+| CFP architecture reconstruction | ✅ EXACT MATCH, `strict=True`, 0 diff |
+| UWF architecture reconstruction | ✅ EXACT MATCH, `strict=True`, 0 diff |
+| CPU-only enforcement | ✅ Verified on 5 independent layers |
+| Preprocessing pipeline | ✅ Implemented · **CFP params ⚠️ ASSUMED, UWF ✅ verified from checkpoint** |
+| Real-image inference (CLI) | ✅ Both modalities, CPU, 10/10 contract checks pass |
+| FastAPI service | ✅ Runs · ❌ **no endpoint runs a model** |
+| Frontend UI shell | ✅ Complete, typed, `tsc` clean |
+| Frontend ↔ backend wiring | ❌ Zero network calls |
+| Grad-CAM | ❌ Not implemented (neither side) |
+| Gemini reports | ❌ Not implemented (neither side) |
+| History / PDF | ❌ Not implemented (neither side) |
+| Automated tests / CI | ❌ None |
+| Ground truth / accuracy measurement | ❌ Not possible — no labels in repo |
+| Documentation | ⚠️ `README.md` materially stale |
+
+---
+
+## Closing assessment
+
+The **model layer is finished, rigorously verified, and the best-engineered part of this repository.** Both checkpoints were reconstructed exactly from their own keys, load with `strict=True` and zero diff, sit in `eval()` mode entirely on the CPU, and produce well-formed 5-class distributions on real images — Moderate 70.31 % for CFP, Mild 88.18 % for UWF, both on `tr000001.jpg`, both on CPU, both with Σ ≈ 1.0 and all ten contract assertions passing. The discipline is genuine: no `strict=False` anywhere, no `timm`, no CUDA, no fabricated numbers, and the one genuinely unknown quantity — the CFP input size — is labelled as an assumption in the code, in the log output, and in the JSON payload.
+
+**The product layer does not exist yet.** The API validates an upload and throws the result away; the frontend is a polished shell that never makes a request; Grad-CAM, Gemini, history and PDF are absent from both sides. The frontend's discipline of rendering honest placeholders rather than fake predictions deserves credit, and it should be preserved when the wiring lands.
+
+**The critical path is short and unusually clear:** (1) wire `predictor.predict()` into `POST /predict`; (2) determine the true CFP input size from an external source; (3) obtain labelled data so any accuracy claim becomes possible. Everything else in §12 is downstream of those three.

@@ -2,6 +2,7 @@ import { ImageDropzone } from '../components/analyze/ImageDropzone'
 import { ImagePreview } from '../components/analyze/ImagePreview'
 import { ModalitySelector } from '../components/analyze/ModalitySelector'
 import { AiReportCard } from '../components/reports/AiReportCard'
+import { ApiResponseCard } from '../components/results/ApiResponseCard'
 import { PredictionCard } from '../components/results/PredictionCard'
 import { ProbabilityCard } from '../components/results/ProbabilityCard'
 import { XaiPanel } from '../components/xai/XaiPanel'
@@ -12,7 +13,11 @@ import { Card, CardBody, CardHeader } from '../components/ui/Card'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Notice } from '../components/ui/Placeholder'
 import { MODEL_FILE_NAMES, getModality } from '../data/clinical'
-import type { ModalityKey, PredictionStatus } from '../types'
+import type {
+  ModalityKey,
+  PredictApiResponse,
+  PredictionStatus,
+} from '../types'
 
 export interface AnalyzePageProps {
   modality: ModalityKey
@@ -23,14 +28,20 @@ export interface AnalyzePageProps {
   onSelectImage: (file: File | null) => void
   onClearImage: () => void
   status: PredictionStatus
+  /** Raw `POST /predict` body, `null` before the first successful call. */
+  response: PredictApiResponse | null
+  httpStatus: number | null
+  requestError: string | null
   onAnalyze: () => void
 }
 
 /**
  * Primary workflow: pick a modality, load an image, request an analysis.
  *
- * `onAnalyze` only flips the panels from "idle" to "placeholder". No request
- * leaves the browser and no grade is computed anywhere on this page.
+ * "Analyze Image" POSTs the capture plus the modality to `/predict` and the
+ * response is shown verbatim in the Backend Response card. No grade, confidence
+ * or probability is computed on this page - the clinical panels stay
+ * placeholders until the backend can actually run a model.
  */
 export function AnalyzePage({
   modality,
@@ -41,22 +52,28 @@ export function AnalyzePage({
   onSelectImage,
   onClearImage,
   status,
+  response,
+  httpStatus,
+  requestError,
   onAnalyze,
 }: AnalyzePageProps) {
   const modalityInfo = getModality(modality)
   const hasImage = Boolean(file)
   const hasRun = status === 'analyzed'
+  const isAnalyzing = status === 'analyzing'
+  const isFailed = status === 'error'
 
   return (
     <>
       <Notice
         tone="warning"
         icon={<AlertIcon />}
-        title="Interface only - no inference is running"
+        title="Backend connected - no inference is running"
       >
-        This dashboard renders the full screening interface. The backend is not
-        called, so the DR grade, confidence, per-class probabilities, Grad-CAM
-        maps and AI report below are all placeholders.
+        "Analyze Image" uploads the capture to POST /predict and shows the raw
+        response below. The endpoint validates the upload only, so the DR grade,
+        confidence, per-class probabilities, Grad-CAM maps and AI report are all
+        still placeholders.
       </Notice>
 
       <div className="grid gap-5 xl:grid-cols-2 xl:items-start">
@@ -66,8 +83,16 @@ export function AnalyzePage({
             title="Imaging Input"
             subtitle="Select a modality and load a retinal capture"
             action={
-              <Badge tone={hasRun ? 'brand' : 'muted'}>
-                {hasRun ? 'Analyzed' : 'Idle'}
+              <Badge
+                tone={hasRun ? 'brand' : isFailed ? 'warning' : 'muted'}
+              >
+                {hasRun
+                  ? 'Analyzed'
+                  : isAnalyzing
+                    ? 'Analyzing'
+                    : isFailed
+                      ? 'Failed'
+                      : 'Idle'}
               </Badge>
             }
           />
@@ -92,10 +117,10 @@ export function AnalyzePage({
                 size="lg"
                 block
                 onClick={onAnalyze}
-                disabled={!hasImage}
+                disabled={!hasImage || isAnalyzing}
                 icon={<SparkIcon />}
               >
-                Analyze Image
+                {isAnalyzing ? 'Analyzing...' : 'Analyze Image'}
               </Button>
               <Button
                 variant="secondary"
@@ -130,6 +155,12 @@ export function AnalyzePage({
         </Card>
       </div>
 
+      <ApiResponseCard
+        payload={response}
+        httpStatus={httpStatus}
+        error={requestError}
+      />
+
       <div className="grid gap-5 xl:grid-cols-2 xl:items-start">
         {hasRun ? (
           <>
@@ -157,7 +188,7 @@ export function AnalyzePage({
                   variant="secondary"
                   size="sm"
                   onClick={onAnalyze}
-                  disabled={!hasImage}
+                  disabled={!hasImage || isAnalyzing}
                 >
                   {hasImage ? 'Analyze Image' : 'Upload an image first'}
                 </Button>

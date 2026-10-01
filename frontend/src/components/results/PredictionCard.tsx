@@ -14,8 +14,11 @@ export interface PredictionCardProps {
 }
 
 /**
- * Headline result card. Both result fields stay `null` until the backend can
- * actually run a model, so both render as dashed placeholders.
+ * Headline result card.
+ *
+ * Both result fields stay `null` even after a successful `/predict` call,
+ * because the endpoint validates the upload only and returns no grade. They
+ * therefore keep rendering as dashed placeholders.
  */
 export function PredictionCard({
   modalityLabel,
