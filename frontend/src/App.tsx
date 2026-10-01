@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { predictImage } from './api/client'
 import { AppShell } from './components/layout/AppShell'
 import { useImageSelection } from './hooks/useImageSelection'
@@ -61,8 +61,20 @@ export default function App() {
   const [requestError, setRequestError] = useState<string | null>(null)
   const image = useImageSelection()
 
+  /**
+   * Monotonic request generation.
+   *
+   * The image and the modality can be changed while `/predict` is still in
+   * flight, so a response can arrive after its inputs are gone. Every input
+   * change and every new request bumps this counter; a pending request that
+   * resolves against a different value is stale and is dropped instead of
+   * overwriting the current state.
+   */
+  const requestGeneration = useRef(0)
+
   // Any change to the inputs invalidates the result panels.
   const resetResults = useCallback(() => {
+    requestGeneration.current += 1
     setStatus('idle')
     setResponse(null)
     setHttpStatus(null)
@@ -96,6 +108,9 @@ export default function App() {
       return
     }
 
+    // Claim a generation: this also supersedes any request still in flight.
+    const generation = (requestGeneration.current += 1)
+
     setStatus('analyzing')
     setResponse(null)
     setHttpStatus(null)
@@ -103,10 +118,16 @@ export default function App() {
 
     try {
       const result = await predictImage(file, modality)
+      if (requestGeneration.current !== generation) {
+        return
+      }
       setHttpStatus(result.httpStatus)
       setResponse(result.data)
       setStatus('analyzed')
     } catch (error) {
+      if (requestGeneration.current !== generation) {
+        return
+      }
       const failed = error as { httpStatus?: number; message?: string }
       setHttpStatus(failed.httpStatus ?? null)
       setResponse(null)
