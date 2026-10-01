@@ -1,27 +1,32 @@
-"""RetinaGrade AI - FastAPI backend skeleton (CPU only).
+"""RetinaGrade AI - FastAPI backend (CPU only).
 
-THIS IS A DEVELOPMENT SKELETON. Only three endpoints exist and none of them
-runs a neural network:
-
-============  ======================================================  =============
+============  =====================================================  =============
 Endpoint      Purpose                                                  Model run?
-============  ======================================================  =============
+============  =====================================================  =============
 ``GET  /``    Service banner                                           NO
 ``GET  /health``  Liveness + device/CUDA facts                         NO
-``POST /predict``  **Validates the request only** and returns a        **NO**
-                 temporary placeholder payload
-============  ======================================================  =============
+``POST /predict``  Real DR grading of an uploaded image                **YES**
+============  =====================================================  =============
 
-Deliberately **not** implemented yet, by instruction:
-  * real image prediction (the trained models are never called)
+``POST /predict`` validates the upload and then calls
+``inference.predictor.predict()``, which runs the real CFP or UWF
+EfficientNet-B0 checkpoint on the CPU. The response is the predictor's own
+payload: predicted class, label, confidence and the full 5-class probability
+distribution, plus provenance (``device``, ``checkpoint``, ``image_size`` and
+the preprocessing block that says whether those values came from the checkpoint
+or are a documented assumption).
+
+Domain errors from the inference layer carry their own ``code`` and
+``http_status`` (``inference/exceptions.py``) and are translated here into the
+``{"success": false, "error": {...}}`` envelope. They never leak a traceback.
+
+Still **not** implemented, by instruction:
   * Grad-CAM / saliency maps
-  * Gemini report generation
-  * any Flutter or frontend code
+  * Gemini report generation, PDF export, screening history
   * dataset evaluation or accuracy calculation
 
-Because no model is loaded, this app starts instantly and cannot touch CUDA.
-``inference/`` is left untouched: the CFP and UWF checkpoints on disk are not
-modified, read or executed by this file.
+Nothing here selects a CUDA device. The models load lazily on the first request
+for a modality, so that first request also pays the checkpoint load.
 
 Run from ``backend/``::
 
@@ -33,16 +38,20 @@ Then open http://127.0.0.1:8000/docs for the interactive OpenAPI page.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
+import time
+from typing import Any, Dict, List, Literal
 
 import torch
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
+from inference.exceptions import InferenceError
+from inference.predictor import predict
 from schemas.api import (
     HealthResponse,
-    PredictDevResponse,
     RootResponse,
 )
 
@@ -50,7 +59,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("retinagrade")
 
 APP_NAME = "RetinaGrade AI"
-API_VERSION = "0.3.0-dev"
+API_VERSION = "0.4.0-dev"
 
 #: CPU is mandatory. CUDA is reported but never used.
 DEVICE = "cpu"
@@ -60,9 +69,6 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 #: The two modalities this API accepts. Mirrors
 #: ``inference.model_loader.SUPPORTED_MODALITIES``.
 SUPPORTED_MODALITIES = ("cfp", "uwf")
-
-#: Lowercase modality key -> display name used in the response body.
-MODALITY_DISPLAY_NAMES: Dict[str, str] = {"cfp": "CFP", "uwf": "UWF"}
 
 #: Development origins. ``ALLOW_LOCALHOST_ANY_PORT`` additionally permits any
 #: port on localhost, because a Flutter web dev server picks a free port.
@@ -83,8 +89,9 @@ app = FastAPI(
     title=f"{APP_NAME} API",
     version=API_VERSION,
     description=(
-        "Backend skeleton for diabetic retinopathy screening (CFP / UWF), CPU only. "
-        "Image prediction is NOT implemented yet."
+        "Backend API for diabetic retinopathy screening (CFP / UWF), CPU only. "
+        "POST /predict runs the real trained model; Grad-CAM and report "
+        "generation are not implemented."
     ),
 )
 
@@ -104,6 +111,40 @@ def _error(status_code: int, code: str, message: str) -> JSONResponse:
         status_code=status_code,
         content={"success": False, "error": {"code": code, "message": message}},
     )
+
+
+class PredictionModel(BaseModel):
+    """A real DR prediction.
+
+    Field-for-field mirror of ``inference.predictor.PredictionResult.to_dict()``.
+    ``device`` is pinned to ``"cpu"``: nothing in this project may touch CUDA.
+    ``probabilities`` is the full 5-class ICDR distribution, not just the winner.
+    """
+
+    modality: str = Field(examples=["CFP"])
+    model: str = Field(examples=["EfficientNet-B0"])
+    predicted_class: int = Field(ge=0, le=4, examples=[2])
+    label: str = Field(examples=["Moderate"])
+    description: str = Field(examples=["Moderate non-proliferative DR"])
+    confidence: float = Field(ge=0.0, le=1.0, examples=[0.703081])
+    probabilities: Dict[str, float]
+    image_size: int = Field(examples=[224])
+    device: Literal["cpu"] = Field(default="cpu")
+    checkpoint: str = Field(examples=["EfficientNetB0_CFP_final.pth"])
+    #: Includes ``values_verified_by_checkpoint``. It is ``false`` for CFP,
+    #: whose checkpoint stores no preprocessing config, so the input size used
+    #: is a documented assumption rather than checkpoint data.
+    preprocessing: Dict[str, Any]
+
+
+class PredictResponse(BaseModel):
+    """Body of a successful ``POST /predict``."""
+
+    success: Literal[True] = True
+    #: Wall-clock milliseconds spent inside ``predict()``, including the lazy
+    #: checkpoint load on the first request for a modality.
+    inference_ms: float = Field(examples=[812.44])
+    prediction: PredictionModel
 
 
 @app.exception_handler(Exception)
@@ -139,35 +180,40 @@ def health() -> HealthResponse:
 
 @app.post(
     "/predict",
-    response_model=PredictDevResponse,
+    response_model=PredictResponse,
     tags=["inference"],
-    summary="Validate an upload only (TEMPORARY - does not run the model)",
+    summary="Grade an uploaded retinal image (real inference, CPU only)",
     responses={
         400: {"description": "Invalid modality"},
-        422: {"description": "Missing or empty image"},
         413: {"description": "Image too large"},
+        422: {"description": "Missing, empty or undecodable image"},
+        500: {"description": "Inference failed"},
+        503: {"description": "Model checkpoint unavailable"},
     },
 )
-async def predict_validation_only(
-    image: UploadFile = File(..., description="Retinal image (not decoded in this skeleton)."),
+async def predict_image(
+    image: UploadFile = File(..., description="Retinal image (CFP or UWF)."),
     modality: str = Form(..., description="Imaging modality: 'cfp' or 'uwf'."),
-) -> PredictDevResponse:
-    """Validate the request, then return a placeholder. NO INFERENCE.
+) -> PredictResponse:
+    """Validate the upload, then run the matching real model on the CPU.
 
-    Validation performed, and nothing more:
-      1. an ``image`` file field was actually sent;
-      2. the file has a filename;
+    Validation, before anything is decoded or executed:
+      1. ``modality`` is ``cfp`` or ``uwf`` (case-insensitive, trimmed);
+      2. an ``image`` file field was actually sent;
       3. the file is not empty;
-      4. the file is within the size limit;
-      5. ``modality`` is ``cfp`` or ``uwf`` (case-insensitive, whitespace
-         trimmed).
+      4. the file is within the 25 MB size limit.
 
-    The image bytes are read only to check emptiness and size. They are not
-    decoded, not preprocessed and not passed to any network.
+    Only then is the payload handed to ``inference.predictor.predict()``, which
+    decodes, preprocesses and runs the checkpoint. That call is CPU-bound and
+    would block the event loop, so it is dispatched to a worker thread; the
+    event loop stays free to serve other requests while the network runs.
+
+    Errors raised by the inference layer (a corrupt upload, a missing or
+    mismatched checkpoint) are translated with their own ``code`` and
+    ``http_status`` into the standard error envelope, without a traceback.
     """
     key = (modality or "").strip().lower()
 
-    # --- validation only: no model is loaded or executed -------------------
     if key not in SUPPORTED_MODALITIES:
         return _error(
             400,
@@ -188,19 +234,32 @@ async def predict_validation_only(
             f"The uploaded image is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
         )
 
+    started = time.perf_counter()
+    try:
+        result = await run_in_threadpool(predict, payload, key)
+    except InferenceError as exc:
+        logger.warning("POST /predict failed (%s): %s", type(exc).__name__, exc)
+        return _error(exc.http_status, exc.code, str(exc))
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+
     logger.info(
-        "POST /predict validated: modality=%s, file=%s, %d bytes. Model NOT run (skeleton).",
+        "POST /predict: modality=%s, file=%s, %d bytes -> %s (class %d, confidence %.6f) "
+        "on %s in %.1f ms",
         key,
         image.filename,
         len(payload),
+        result.label,
+        result.predicted_class,
+        result.confidence,
+        result.device,
+        elapsed_ms,
     )
-    # -----------------------------------------------------------------------
 
-    return PredictDevResponse(
+    return PredictResponse(
         success=True,
-        message="Image received",
-        modality=MODALITY_DISPLAY_NAMES[key],
+        inference_ms=round(elapsed_ms, 2),
+        prediction=PredictionModel(**result.to_dict()),
     )
 
 
-__all__ = ["app"]
+__all__ = ["app", "PredictResponse", "PredictionModel"]
