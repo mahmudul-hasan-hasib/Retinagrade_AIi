@@ -1,8 +1,8 @@
 /**
  * Thin HTTP client for the RetinaGrade AI backend.
  *
- * Scope (Part 5A): exactly one call is implemented, `POST /predict`, which
- * today only validates the upload on the server. No inference, Grad-CAM or
+ * Scope: exactly one call is implemented, `POST /predict`, which runs the real
+ * CFP or UWF model on the backend's CPU and returns a DR grade. No Grad-CAM or
  * report generation happens client-side, and no response field is invented
  * here - the server payload is passed through untouched.
  */
@@ -83,7 +83,7 @@ function readError(body: JsonRecord | null, httpStatus: number): PredictApiError
 /**
  * Send the selected capture to `POST /predict` as `multipart/form-data`.
  *
- * Field names match `backend/main.py::predict_validation_only`:
+ * Field names match `backend/main.py::predict_image`:
  *   * `image`    - the file, sent under its original name;
  *   * `modality` - `'cfp'` or `'uwf'`.
  *

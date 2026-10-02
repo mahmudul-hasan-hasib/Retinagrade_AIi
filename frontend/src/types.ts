@@ -5,9 +5,9 @@
  * `backend/inference/predictor.py` (`DR_CLASSES` / `PROBABILITY_KEYS`), so the
  * UI is already aligned with the order the network will emit.
  *
- * NOTE: no inference, Grad-CAM or report value exists yet. Every result field
- * in this app is `null` and is rendered as a placeholder. The only live data is
- * the `/predict` response shown on the analyze page.
+ * NOTE: Grad-CAM and AI report values do not exist yet. The analyze page renders
+ * the live `/predict` prediction (grade, confidence, 5-class probabilities);
+ * every other result surface is still a placeholder.
  */
 
 export type ModalityKey = 'cfp' | 'uwf'
@@ -40,17 +40,41 @@ export interface DrClass {
 export type PredictionStatus = 'idle' | 'analyzing' | 'analyzed' | 'error'
 
 /**
+ * A real DR prediction, mirrored from
+ * `inference/predictor.py::PredictionResult.to_dict()` via
+ * `backend/main.py::PredictionModel`.
+ *
+ * `probabilities` is the full 5-class ICDR softmax distribution keyed by
+ * `DR_CLASSES[i].key`, and `predicted_class` is its argmax index.
+ */
+export interface PredictApiPrediction {
+  /** Display name from the backend, e.g. `CFP` / `UWF`. */
+  modality?: string
+  model?: string
+  predicted_class?: number
+  label?: string
+  description?: string
+  confidence?: number
+  probabilities?: Record<string, number>
+  image_size?: number
+  device?: string
+  checkpoint?: string
+  preprocessing?: Record<string, unknown>
+}
+
+/**
  * Body returned by `POST /predict`.
  *
- * The backend currently validates the upload only, so these three fields are
- * the whole payload. They are mirrored from
- * `backend/schemas/api.py::PredictDevResponse` and every field is optional here
- * so an unexpected server response renders instead of crashing the page.
+ * A successful call returns `inference_ms` plus the full `prediction` object.
+ * Failures return `{ success: false, error: { code, message } }` instead. Every
+ * field is optional so an unexpected server response renders instead of
+ * crashing the page.
  */
 export interface PredictApiResponse {
   success?: boolean
-  message?: string
-  modality?: string
+  /** Wall-clock milliseconds spent inside `predict()`. */
+  inference_ms?: number
+  prediction?: PredictApiPrediction
   error?: {
     code?: string
     message?: string

@@ -14,9 +14,9 @@ export interface ApiResponseCardProps {
 /**
  * Raw output of `POST /predict`.
  *
- * Deliberately unstructured: the endpoint performs upload validation only, so
- * this card shows the JSON exactly as returned instead of projecting it onto
- * clinical fields that do not exist yet.
+ * Deliberately unstructured: the body is shown exactly as returned, alongside
+ * the projected clinical panels, so the UI never has to be trusted over the
+ * server payload.
  */
 export function ApiResponseCard({
   payload,
@@ -31,7 +31,7 @@ export function ApiResponseCard({
       <CardHeader
         icon={<CpuIcon />}
         title="Backend Response"
-        subtitle="POST /predict - upload validation only"
+        subtitle="POST /predict - real model output"
         action={
           <Badge tone={failed ? 'warning' : hasResponse ? 'success' : 'muted'}>
             {failed ? 'Failed' : hasResponse ? `HTTP ${httpStatus ?? '-'}` : 'No request yet'}

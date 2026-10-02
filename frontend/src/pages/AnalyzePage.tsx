@@ -12,7 +12,7 @@ import { Button } from '../components/ui/Button'
 import { Card, CardBody, CardHeader } from '../components/ui/Card'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Notice } from '../components/ui/Placeholder'
-import { MODEL_FILE_NAMES, getModality } from '../data/clinical'
+import { DR_CLASSES, MODEL_FILE_NAMES, getModality } from '../data/clinical'
 import type {
   ModalityKey,
   PredictApiResponse,
@@ -63,17 +63,33 @@ export function AnalyzePage({
   const isAnalyzing = status === 'analyzing'
   const isFailed = status === 'error'
 
+  // Read straight from the API body. Nothing here derives a grade: if the server
+  // did not send a value the panel keeps its `null` placeholder.
+  const prediction = response?.prediction ?? null
+  const label = prediction?.label ?? null
+  const confidence =
+    typeof prediction?.confidence === 'number' ? prediction.confidence : null
+  const probabilities = prediction?.probabilities ?? null
+  const predictedIndex =
+    typeof prediction?.predicted_class === 'number' ? prediction.predicted_class : null
+  const inferenceMs =
+    typeof response?.inference_ms === 'number' ? response.inference_ms : null
+
+  // Display-only integrity check for the softmax head; not a clinical value.
+  const probabilitySum = probabilities
+    ? DR_CLASSES.reduce((total, drClass) => total + (probabilities[drClass.key] ?? 0), 0)
+    : null
+
   return (
     <>
       <Notice
         tone="warning"
         icon={<AlertIcon />}
-        title="Backend connected - no inference is running"
+        title="Real inference is running"
       >
-        "Analyze Image" uploads the capture to POST /predict and shows the raw
-        response below. The endpoint validates the upload only, so the DR grade,
-        confidence, per-class probabilities, Grad-CAM maps and AI report are all
-        still placeholders.
+        "Analyze Image" uploads the capture to POST /predict and the returned DR
+        grade, confidence and per-class probabilities are shown below, as is the
+        raw response. Grad-CAM maps and the AI report are still placeholders.
       </Notice>
 
       <div className="grid gap-5 xl:grid-cols-2 xl:items-start">
@@ -167,14 +183,16 @@ export function AnalyzePage({
             <PredictionCard
               modalityLabel={modalityInfo.label}
               fileName={file?.name ?? null}
-              label={null}
-              confidence={null}
-              modelName={MODEL_FILE_NAMES[modality]}
+              label={label}
+              confidence={confidence}
+              modelName={prediction?.checkpoint ?? MODEL_FILE_NAMES[modality]}
+              inferenceMs={inferenceMs}
+              description={prediction?.description ?? null}
             />
             <ProbabilityCard
-              probabilities={null}
-              predictedIndex={null}
-              probabilitySum={null}
+              probabilities={probabilities}
+              predictedIndex={predictedIndex}
+              probabilitySum={probabilitySum}
             />
           </>
         ) : (

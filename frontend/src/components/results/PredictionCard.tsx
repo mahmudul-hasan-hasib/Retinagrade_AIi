@@ -11,14 +11,18 @@ export interface PredictionCardProps {
   /** 0..1 confidence. `null` = not computed yet. */
   confidence: number | null
   modelName: string
+  /** Server-reported milliseconds spent in `predict()`. `null` = unavailable. */
+  inferenceMs?: number | null
+  /** Full grade description from the backend, e.g. `Moderate non-proliferative DR`. */
+  description?: string | null
 }
 
 /**
  * Headline result card.
  *
- * Both result fields stay `null` even after a successful `/predict` call,
- * because the endpoint validates the upload only and returns no grade. They
- * therefore keep rendering as dashed placeholders.
+ * Values come straight from the `/predict` response; nothing is computed or
+ * rounded here. A `null` label/confidence still renders as the dashed
+ * placeholder, so a missing value can never be mistaken for a measurement.
  */
 export function PredictionCard({
   modalityLabel,
@@ -26,25 +30,40 @@ export function PredictionCard({
   label,
   confidence,
   modelName,
+  inferenceMs = null,
+  description = null,
 }: PredictionCardProps) {
+  const hasGrade = label !== null
+
   return (
     <Card tone="accent">
       <CardHeader
         icon={<SparkIcon />}
         title="Prediction Result"
-        subtitle="Awaiting a real model run"
+        subtitle={hasGrade ? 'Real model run (CPU)' : 'Awaiting a real model run'}
       />
 
       <CardBody className="space-y-4">
-        <div className="rounded-xl border border-dashed border-brand-200 bg-brand-50/40 px-4 py-4 text-center">
+        <div
+          className={`rounded-xl border px-4 py-4 text-center ${
+            hasGrade
+              ? 'border-brand-200 bg-brand-50/40'
+              : 'border-dashed border-brand-200 bg-brand-50/40'
+          }`}
+        >
           <p className="text-[11px] font-medium tracking-wide text-brand-600 uppercase">
             Diabetic retinopathy grade
           </p>
-          <p className="mt-2 font-mono text-2xl font-bold text-ink-300">
+          <p
+            className={`mt-2 font-mono text-2xl font-bold ${
+              hasGrade ? 'text-ink-900' : 'text-ink-300'
+            }`}
+          >
             {label ?? '—'}
           </p>
           <p className="mt-1.5 text-[11px] leading-relaxed text-ink-400">
-            No grade has been produced. Inference is not connected in this build.
+            {description ??
+              'No grade has been produced. Inference is not connected in this build.'}
           </p>
         </div>
 
@@ -87,7 +106,9 @@ export function PredictionCard({
               <ClockIcon className="size-3" />
               Inference time
             </dt>
-            <dd className="mt-0.5 font-mono font-medium text-ink-700">—</dd>
+            <dd className="mt-0.5 font-mono font-medium text-ink-700">
+              {inferenceMs === null ? '—' : `${inferenceMs.toFixed(2)} ms`}
+            </dd>
           </div>
         </dl>
 

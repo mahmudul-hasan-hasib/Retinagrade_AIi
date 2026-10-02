@@ -50,7 +50,8 @@ const PAGE_META: Record<NavItemId, { title: string; subtitle: string }> = {
  *
  * "Analyze Image" is the only place that talks to the API: it POSTs the capture
  * and the modality to `/predict` and stores the response verbatim. No grade,
- * confidence or probability is computed anywhere in this tree.
+ * confidence or probability is computed in this tree - the analyze page only
+ * projects fields the server sent.
  */
 export default function App() {
   const [activeItem, setActiveItem] = useState<NavItemId>('analyze')
