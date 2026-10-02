@@ -19,6 +19,8 @@ export interface Modality {
   label: string
   /** Short form used in dense UI (badges, table cells). */
   shortLabel: string
+  /** Plain-language name shown next to the short form on user-facing screens. */
+  fullName: string
   /** Plain-language explanation shown under the selector. */
   description: string
   /** Expected framing / field of view of the capture. */
@@ -30,6 +32,12 @@ export interface DrClass {
   /** Stable key; identical to `label` so bars and results can never drift. */
   key: string
   label: string
+  /**
+   * Sentences-case grade name for headline display, e.g.
+   * `Moderate Diabetic Retinopathy`. Presentation only: the model still returns
+   * the short `label`, and nothing here is ever sent back to the API.
+   */
+  fullLabel: string
   description: string
   /**
    * Static, semantic severity used only for iconography and bar tinting.
@@ -39,6 +47,18 @@ export interface DrClass {
 }
 
 export type PredictionStatus = 'idle' | 'analyzing' | 'analyzed' | 'error'
+
+/**
+ * Lifecycle of `GET /health`, which decides whether Gemini can be offered at
+ * all. `unknown` means the check has not answered yet.
+ */
+export type GeminiAvailability = 'unknown' | 'ready' | 'unavailable' | 'error'
+
+/**
+ * Lifecycle of `POST /explain`. Independent of the prediction: a Gemini failure
+ * never invalidates a grade that is already on screen.
+ */
+export type ExplainStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
 
 /**
  * A real DR prediction, mirrored from
@@ -100,10 +120,4 @@ export interface AnalysisRecord {
   probabilities: Record<string, number> | null
 }
 
-export type NavItemId =
-  | 'dashboard'
-  | 'analyze'
-  | 'history'
-  | 'explainability'
-  | 'reports'
-  | 'settings'
+export type NavItemId = 'analyze' | 'explainability' | 'model'

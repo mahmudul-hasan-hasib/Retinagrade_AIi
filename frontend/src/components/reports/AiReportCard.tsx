@@ -1,7 +1,13 @@
 import type { ExplainApiResponse } from '../../api/client'
 import { getModality } from '../../data/clinical'
 import { formatPercent, NO_VALUE } from '../../lib/format'
-import type { ModalityKey, PredictionStatus, PredictApiPrediction } from '../../types'
+import type {
+  ExplainStatus,
+  GeminiAvailability,
+  ModalityKey,
+  PredictionStatus,
+  PredictApiPrediction,
+} from '../../types'
 import { AlertIcon, CheckIcon, ClockIcon, CpuIcon, DocumentIcon, SparkIcon } from '../icons'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
@@ -9,11 +15,7 @@ import { Card, CardBody, CardHeader } from '../ui/Card'
 import { Skeleton } from '../ui/Feedback'
 import { Notice } from '../ui/Placeholder'
 
-/** Lifecycle of `GET /health`, which decides if the action can be offered. */
-export type GeminiAvailability = 'unknown' | 'ready' | 'unavailable' | 'error'
-
-/** Lifecycle of `POST /explain`, independent of `/predict` and `/gradcam`. */
-export type ExplainStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
+export type { ExplainStatus, GeminiAvailability }
 
 export interface AiReportCardProps {
   fileName: string | null

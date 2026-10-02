@@ -97,7 +97,7 @@ export function AppShell({
           onOpenMenu={() => setIsDrawerOpen(true)}
         />
 
-        <main id="main-content" className="px-4 py-5 sm:px-6 sm:py-6">
+        <main id="main-content" className="px-4 py-6 sm:px-6 sm:py-8">
           <div className="mx-auto w-full max-w-[1500px] space-y-5 sm:space-y-6">
             {children}
           </div>
@@ -105,8 +105,8 @@ export function AppShell({
 
         <footer className="border-t border-line px-4 py-5 sm:px-6">
           <p className="mx-auto max-w-[1500px] text-[11px] leading-relaxed text-ink-400">
-            RetinaGrade AI &middot; research prototype. Results are placeholders in
-            this build and must never be used for clinical decisions.
+            RetinaGrade AI &middot; AI-generated interpretation. Not a standalone
+            medical diagnosis.
           </p>
         </footer>
       </div>

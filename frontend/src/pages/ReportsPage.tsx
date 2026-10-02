@@ -1,7 +1,12 @@
 import type { ExplainApiResponse } from '../api/client'
 import { AiReportCard } from '../components/reports/AiReportCard'
-import type { ExplainStatus, GeminiAvailability } from '../components/reports/AiReportCard'
-import type { ModalityKey, PredictionStatus, PredictApiPrediction } from '../types'
+import type {
+  ExplainStatus,
+  GeminiAvailability,
+  ModalityKey,
+  PredictionStatus,
+  PredictApiPrediction,
+} from '../types'
 
 export interface ReportsPageProps {
   fileName: string | null

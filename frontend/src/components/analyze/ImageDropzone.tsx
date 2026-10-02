@@ -1,15 +1,20 @@
 import { useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, KeyboardEvent } from 'react'
-import { ACCEPTED_IMAGE_TYPES, MAX_UPLOAD_BYTES } from '../../data/clinical'
-import { AlertIcon, ImageIcon, TrashIcon, UploadIcon } from '../icons'
-import { Button } from '../ui/Button'
+import { ACCEPTED_IMAGE_TYPES } from '../../data/clinical'
+import { AlertIcon, UploadIcon } from '../icons'
+import {
+  ImagePreview,
+  SUPPORTED_FORMAT_LABELS,
+  SUPPORTED_SIZE_LABEL,
+} from './ImagePreview'
 
 export interface ImageDropzoneProps {
   file: File | null
+  previewUrl: string | null
+  modalityLabel: string
   error: string | null
   onSelect: (file: File | null) => void
-  onClear: () => void
-  accept?: string
+  disabled?: boolean
 }
 
 const ACCEPT_ATTRIBUTE = ACCEPTED_IMAGE_TYPES.join(',')
@@ -19,16 +24,26 @@ const ACCEPT_ATTRIBUTE = ACCEPTED_IMAGE_TYPES.join(',')
  *
  * Selection is local: the file is handed to the parent for a preview and only
  * leaves the browser when "Analyze Image" triggers the `/predict` request.
+ *
+ * Once a capture is chosen this same area becomes its preview, so the page never
+ * shows the same image twice.
  */
 export function ImageDropzone({
   file,
+  previewUrl,
+  modalityLabel,
   error,
   onSelect,
-  onClear,
-  accept = ACCEPT_ATTRIBUTE,
+  disabled = false,
 }: ImageDropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
+
+  function openPicker() {
+    if (!disabled) {
+      inputRef.current?.click()
+    }
+  }
 
   function handleInputChange(event: ChangeEvent<HTMLInputElement>) {
     onSelect(event.target.files?.[0] ?? null)
@@ -39,49 +54,42 @@ export function ImageDropzone({
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setIsDragging(false)
+    if (disabled) {
+      return
+    }
     onSelect(event.dataTransfer.files?.[0] ?? null)
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
-      inputRef.current?.click()
+      openPicker()
     }
   }
 
-  if (file) {
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center gap-3 rounded-xl border border-line bg-ink-50/60 px-3.5 py-3">
-          <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-surface text-brand-600 ring-1 ring-line">
-            <ImageIcon className="size-4.5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-ink-800" title={file.name}>
-              {file.name}
-            </p>
-            <p className="mt-0.5 font-mono text-[11px] text-ink-500">
-              {file.type || 'unknown type'} &middot; {(file.size / 1024).toFixed(0)} KB
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClear}
-            icon={<TrashIcon />}
-            aria-label="Remove selected image"
-          >
-            Remove
-          </Button>
-        </div>
+  const fileInput = (
+    <input
+      ref={inputRef}
+      type="file"
+      accept={ACCEPT_ATTRIBUTE}
+      className="sr-only"
+      onChange={handleInputChange}
+      tabIndex={-1}
+      aria-hidden="true"
+    />
+  )
 
-        <input
-          ref={inputRef}
-          type="file"
-          accept={accept}
-          className="hidden"
-          onChange={handleInputChange}
+  if (file && previewUrl) {
+    return (
+      <div className="space-y-2">
+        <ImagePreview
+          previewUrl={previewUrl}
+          fileName={file.name}
+          modalityLabel={modalityLabel}
+          onChangeImage={openPicker}
+          disabled={disabled}
         />
+        {fileInput}
       </div>
     )
   }
@@ -90,57 +98,57 @@ export function ImageDropzone({
     <div className="space-y-2">
       <div
         role="button"
-        tabIndex={0}
+        tabIndex={disabled ? -1 : 0}
+        aria-disabled={disabled || undefined}
         aria-label="Upload retinal image"
-        onClick={() => inputRef.current?.click()}
+        onClick={openPicker}
         onKeyDown={handleKeyDown}
         onDragOver={(event) => {
           event.preventDefault()
-          setIsDragging(true)
+          if (!disabled) {
+            setIsDragging(true)
+          }
         }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
         className={[
-          'flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors',
+          'flex flex-col items-center justify-center gap-4 rounded-[14px] border border-dashed px-6 py-14 text-center transition-colors',
+          disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
           isDragging
             ? 'border-brand-400 bg-brand-50/60'
-            : 'border-ink-200 bg-ink-50/40 hover:border-brand-300 hover:bg-brand-50/30',
+            : 'border-ink-200 bg-ink-50/50 hover:border-brand-300 hover:bg-brand-50/30',
         ].join(' ')}
       >
-        <span className="grid size-12 place-items-center rounded-2xl bg-surface text-brand-600 ring-1 ring-line shadow-sm">
+        <span className="grid size-12 place-items-center rounded-2xl bg-surface text-brand-600 ring-1 ring-line">
           <UploadIcon className="size-5.5" />
         </span>
-        <span className="space-y-1">
-          <span className="block text-sm font-medium text-ink-800">
-            Drop a retinal image here
+
+        <span className="space-y-1.5">
+          <span className="block text-[15px] font-semibold text-ink-900">
+            Upload retinal image
           </span>
-          <span className="block text-xs text-ink-500">
-            or <span className="font-medium text-brand-700">browse files</span>
+          <span className="block text-[13px] leading-relaxed text-ink-500">
+            Drag and drop your image here or{' '}
+            <span className="font-medium text-brand-700">browse from your computer</span>
           </span>
         </span>
-        <span className="mt-1 font-mono text-[11px] text-ink-400">
-          JPEG &middot; PNG &middot; TIFF &middot; WEBP &middot; BMP &mdash; max{' '}
-          {MAX_UPLOAD_BYTES / (1024 * 1024)} MB
+
+        <span className="text-[12px] text-ink-400">
+          {SUPPORTED_FORMAT_LABELS} &middot; {SUPPORTED_SIZE_LABEL}
         </span>
       </div>
 
       {error ? (
         <p
           role="alert"
-          className="flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 ring-1 ring-red-200"
+          className="flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700 ring-1 ring-red-200"
         >
           <AlertIcon className="mt-px size-3.5 shrink-0" />
           {error}
         </p>
       ) : null}
 
-      <input
-        ref={inputRef}
-        type="file"
-        accept={accept}
-        className="hidden"
-        onChange={handleInputChange}
-      />
+      {fileInput}
     </div>
   )
 }

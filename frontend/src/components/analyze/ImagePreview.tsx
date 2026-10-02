@@ -1,77 +1,102 @@
-import { EyeIcon, ImageIcon, LayersIcon } from '../icons'
-import { Skeleton } from '../ui/Feedback'
+import { useState } from 'react'
+import type { SyntheticEvent } from 'react'
+import { MAX_UPLOAD_BYTES } from '../../data/clinical'
+import { UploadIcon } from '../icons'
 
 export interface ImagePreviewProps {
-  previewUrl: string | null
-  fileName: string | null
+  previewUrl: string
+  fileName: string
   modalityLabel: string
+  onChangeImage: () => void
+  disabled?: boolean
 }
 
+/** Formats offered in the picker, as short labels. */
+export const SUPPORTED_FORMAT_LABELS = 'JPG · PNG · TIFF'
+
+/** Upper bound on one upload, matching the server limit. */
+export const SUPPORTED_SIZE_LABEL = `Up to ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB`
+
 /**
- * Preview surface for the selected fundus image.
+ * Selected-capture state of the upload area.
  *
- * Renders the local file object URL only - no network access, no decoding to
- * pixels by the app itself.
+ * Shows the image itself plus who it is: file name, chosen modality and - only
+ * once the browser has decoded the local preview - its pixel size. No file size,
+ * MIME type, checksum or model detail: none of that helps judge a capture.
  */
 export function ImagePreview({
   previewUrl,
   fileName,
   modalityLabel,
+  onChangeImage,
+  disabled = false,
 }: ImagePreviewProps) {
-  const hasImage = Boolean(previewUrl)
+  /**
+   * Measured size, tagged with the capture it belongs to.
+   *
+   * Deriving the label from the tag means a newly selected image can never show
+   * the previous file's dimensions, without an effect that would reset state
+   * after the render that needs it.
+   */
+  const [measured, setMeasured] = useState<{ url: string; label: string } | null>(
+    null,
+  )
+  const dimensions = measured?.url === previewUrl ? measured.label : null
+
+  function handleLoad(event: SyntheticEvent<HTMLImageElement>) {
+    const image = event.currentTarget
+    if (!image.naturalWidth || !image.naturalHeight) {
+      return
+    }
+    setMeasured({
+      url: previewUrl,
+      label: `${image.naturalWidth} × ${image.naturalHeight} px`,
+    })
+  }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="relative flex min-h-56 flex-1 items-center justify-center overflow-hidden rounded-xl border border-line bg-ink-900 p-3 sm:min-h-72">
-        {hasImage ? (
-          <img
-            src={previewUrl ?? ''}
-            alt={`Uploaded retinal image: ${fileName ?? 'retinal image'}`}
-            className="max-h-[26rem] w-auto rounded-lg object-contain"
-          />
-        ) : (
-          <div className="flex w-full max-w-sm flex-col items-center gap-3 py-10 text-center">
-            <span className="grid size-12 place-items-center rounded-2xl bg-white/5 text-ink-400 ring-1 ring-white/10">
-              <ImageIcon className="size-5.5" />
-            </span>
-            <p className="text-sm font-medium text-ink-300">No image loaded</p>
-            <p className="text-xs leading-relaxed text-ink-500">
-              Select or drop a {modalityLabel} capture to preview it here.
-            </p>
-          </div>
-        )}
+    <div className="overflow-hidden rounded-[14px] border border-line bg-surface">
+      <div className="flex flex-col items-center gap-4 p-5 sm:flex-row sm:items-center">
+        <img
+          src={previewUrl}
+          alt={`Retinal image selected for analysis: ${fileName}`}
+          onLoad={handleLoad}
+          className="size-28 shrink-0 rounded-xl bg-ink-900 object-contain"
+        />
 
-        {hasImage ? (
-          <span className="absolute top-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
-            <EyeIcon className="size-3" />
-            Local preview
-          </span>
-        ) : null}
-      </div>
-
-      <div className="mt-3 space-y-2.5">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[11px] font-medium tracking-wide text-ink-500 uppercase">
-            Source file
-          </span>
-          <span className="truncate font-mono text-[11px] text-ink-600" title={fileName ?? ''}>
-            {fileName ?? '—'}
-          </span>
-        </div>
-
-        <div className="space-y-1.5">
-          <p className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-ink-500 uppercase">
-            <LayersIcon className="size-3" />
-            Grad-CAM overlay
+        <div className="min-w-0 flex-1 text-center sm:text-left">
+          <p className="text-[11px] font-medium tracking-wide text-ink-400 uppercase">
+            Selected image
           </p>
-          <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-ink-200 bg-ink-50/60 px-4 text-center">
-            <div className="space-y-2">
-              <Skeleton className="mx-auto h-2 w-24" />
-              <p className="text-[11px] leading-relaxed text-ink-400">
-                Heatmap appears here after Grad-CAM is implemented.
-              </p>
+          <p
+            className="mt-1 truncate text-[15px] font-semibold text-ink-900"
+            title={fileName}
+          >
+            {fileName}
+          </p>
+
+          <dl className="mt-2 flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-[13px] sm:justify-start">
+            <div className="flex items-center gap-1.5">
+              <dt className="text-ink-400">Modality</dt>
+              <dd className="font-medium text-ink-700">{modalityLabel}</dd>
             </div>
-          </div>
+            {dimensions ? (
+              <div className="flex items-center gap-1.5">
+                <dt className="text-ink-400">Dimensions</dt>
+                <dd className="font-medium text-ink-700">{dimensions}</dd>
+              </div>
+            ) : null}
+          </dl>
+
+          <button
+            type="button"
+            onClick={onChangeImage}
+            disabled={disabled}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg text-[13px] font-medium text-brand-700 transition-colors hover:text-brand-800 disabled:cursor-not-allowed disabled:text-ink-300"
+          >
+            <UploadIcon className="size-3.5" />
+            Change image
+          </button>
         </div>
       </div>
     </div>

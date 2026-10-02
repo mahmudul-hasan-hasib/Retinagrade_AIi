@@ -61,11 +61,11 @@ export function CardHeader({
           </span>
         ) : null}
         <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold tracking-tight text-ink-900">
+          <h2 className="truncate text-[15px] font-semibold tracking-tight text-ink-900">
             {title}
           </h2>
           {subtitle ? (
-            <p className="mt-0.5 text-xs leading-relaxed text-ink-500">
+            <p className="mt-0.5 text-[13px] leading-relaxed text-ink-500">
               {subtitle}
             </p>
           ) : null}
@@ -78,10 +78,17 @@ export function CardHeader({
 
 export function CardBody({
   className,
+  roomy = false,
   children,
 }: {
   className?: string
+  /** Extra breathing room for a page's primary card. */
+  roomy?: boolean
   children: ReactNode
 }) {
-  return <div className={cx('px-4 py-4 sm:px-5', className)}>{children}</div>
+  return (
+    <div className={cx(roomy ? 'px-5 py-6 sm:px-7 sm:py-7' : 'px-4 py-4 sm:px-5', className)}>
+      {children}
+    </div>
+  )
 }

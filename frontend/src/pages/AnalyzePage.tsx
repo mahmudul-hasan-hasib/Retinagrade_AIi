@@ -1,24 +1,21 @@
+import { useEffect } from 'react'
+import type { ExplainApiResponse } from '../api/client'
+import { AnalysisResultCard } from '../components/analyze/AnalysisResultCard'
+import { AiExplanationCard } from '../components/analyze/AiExplanationCard'
 import { ImageDropzone } from '../components/analyze/ImageDropzone'
-import { ImagePreview } from '../components/analyze/ImagePreview'
 import { ModalitySelector } from '../components/analyze/ModalitySelector'
-import { AiReportCard } from '../components/reports/AiReportCard'
-import type { ExplainStatus, GeminiAvailability } from '../components/reports/AiReportCard'
-import { ApiResponseCard } from '../components/results/ApiResponseCard'
-import { PredictionCard } from '../components/results/PredictionCard'
-import { ProbabilityCard } from '../components/results/ProbabilityCard'
-import { AlertIcon, SparkIcon } from '../components/icons'
-import { Badge } from '../components/ui/Badge'
+import { AlertIcon, CheckIcon, SparkIcon, UploadIcon } from '../components/icons'
 import { Button } from '../components/ui/Button'
 import { Card, CardBody, CardHeader } from '../components/ui/Card'
-import { EmptyState } from '../components/ui/EmptyState'
-import { Notice } from '../components/ui/Placeholder'
-import { DR_CLASSES, MODEL_FILE_NAMES, getModality } from '../data/clinical'
+import { Spinner } from '../components/ui/Feedback'
+import { getDrClass, getModality } from '../data/clinical'
 import type {
+  ExplainStatus,
+  GeminiAvailability,
   ModalityKey,
   PredictApiResponse,
   PredictionStatus,
 } from '../types'
-import type { ExplainApiResponse } from '../api/client'
 
 export interface AnalyzePageProps {
   modality: ModalityKey
@@ -27,33 +24,34 @@ export interface AnalyzePageProps {
   previewUrl: string | null
   uploadError: string | null
   onSelectImage: (file: File | null) => void
-  onClearImage: () => void
   status: PredictionStatus
-  /** Raw `POST /predict` body, `null` before the first successful call. */
   response: PredictApiResponse | null
-  httpStatus: number | null
-  requestError: string | null
   onAnalyze: () => void
-  gradCamAvailable: boolean
+  /** Whether `/gradcam` is still running for this capture. */
   gradCamPending: boolean
   availability: GeminiAvailability
-  availabilityError: string | null
   explainStatus: ExplainStatus
   explanation: ExplainApiResponse | null
-  explainError: string | null
   onGenerateExplanation: () => void
+  /** Opens the Explainability screen. */
+  onViewExplainability: () => void
 }
 
+/** Friendly copy shown when a prediction request fails. */
+const ERROR_TITLE = 'Unable to analyze this image.'
+const ERROR_HINT = 'Please check the image and try again.'
+
 /**
- * Primary workflow: pick a modality, load an image, request an analysis.
+ * The whole screening journey on one screen: choose a modality, load a capture,
+ * analyse it, read the grade, read a short explanation of it.
  *
- * "Analyze Image" POSTs the capture plus the modality to `/predict` and the
- * response is shown verbatim in the Backend Response card. No grade, confidence
- * or probability is computed on this page - the panels below project fields the
- * server sent and keep a placeholder when the server sent none.
+ * Nothing here derives a grade, a probability or a sentence. `label` is the
+ * server's own predicted class (only the display name is expanded, from
+ * `DR_CLASSES`), and the explanation is Gemini's prose from `/explain`.
  *
- * Grad-CAM is not rendered here: `App` draws the single real `GradCamCard`
- * directly beneath this page, so the heatmap has exactly one home.
+ * Model internals, probabilities, confidences, raw responses and Grad-CAM are
+ * intentionally not rendered here. They remain available on the Explainability
+ * and Model screens, and in the API response itself.
  */
 export function AnalyzePage({
   modality,
@@ -62,195 +60,148 @@ export function AnalyzePage({
   previewUrl,
   uploadError,
   onSelectImage,
-  onClearImage,
   status,
   response,
-  httpStatus,
-  requestError,
   onAnalyze,
-  gradCamAvailable,
   gradCamPending,
   availability,
-  availabilityError,
   explainStatus,
   explanation,
-  explainError,
   onGenerateExplanation,
+  onViewExplainability,
 }: AnalyzePageProps) {
   const modalityInfo = getModality(modality)
   const hasImage = Boolean(file)
-  const hasRun = status === 'analyzed'
   const isAnalyzing = status === 'analyzing'
   const isFailed = status === 'error'
 
-  // Read straight from the API body. Nothing here derives a grade: if the server
-  // did not send a value the panel keeps its `null` placeholder.
   const prediction = response?.prediction ?? null
-  const label = prediction?.label ?? null
-  const confidence =
-    typeof prediction?.confidence === 'number' ? prediction.confidence : null
-  const probabilities = prediction?.probabilities ?? null
-  const predictedIndex =
-    typeof prediction?.predicted_class === 'number' ? prediction.predicted_class : null
-  const inferenceMs =
-    typeof response?.inference_ms === 'number' ? response.inference_ms : null
-
-  // Display-only integrity check for the softmax head; not a clinical value.
-  const probabilitySum = probabilities
-    ? DR_CLASSES.reduce((total, drClass) => total + (probabilities[drClass.key] ?? 0), 0)
+  const gradeTitle = prediction?.label
+    ? (getDrClass(prediction.label)?.fullLabel ?? prediction.label)
     : null
 
+  /**
+   * Ask for the explanation as soon as the grade is final.
+   *
+   * Two conditions are waited on, both of them about request quality rather
+   * than availability: the health check must have reported on Gemini, and the
+   * Grad-CAM follow-up must have settled so its metadata can be part of the
+   * explanation request. The grade itself is already on screen throughout.
+   *
+   * The same `onGenerateExplanation` handler as the AI Reports panel is used -
+   * no second Gemini path exists.
+   */
+  useEffect(() => {
+    if (status !== 'analyzed') return
+    if (explainStatus !== 'idle') return
+    if (availability === 'unknown') return
+    if (gradCamPending) return
+    onGenerateExplanation()
+  }, [
+    status,
+    explainStatus,
+    availability,
+    gradCamPending,
+    onGenerateExplanation,
+  ])
+
   return (
-    <>
-      <Notice
-        tone="warning"
-        icon={<AlertIcon />}
-        title="Real inference is running"
-      >
-        "Analyze Image" uploads the capture to POST /predict and the returned DR
-        grade, confidence and per-class probabilities are shown below, as is the
-        raw response. The Grad-CAM heatmap and the Gemini explanation are separate
-        follow-up requests, each independent of the prediction.
-      </Notice>
+    <div className="mx-auto w-full max-w-[1180px] space-y-8">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-[26px] font-semibold tracking-tight text-balance text-ink-900 sm:text-[28px]">
+            Analyze Retinal Image
+          </h1>
+          <p className="mt-1.5 text-[14px] leading-relaxed text-ink-500">
+            Upload a retinal image to assess diabetic retinopathy severity.
+          </p>
+        </div>
 
-      <div className="grid gap-5 xl:grid-cols-2 xl:items-start">
-        <Card>
-          <CardHeader
-            icon={<SparkIcon />}
-            title="Imaging Input"
-            subtitle="Select a modality and load a retinal capture"
-            action={
-              <Badge
-                tone={hasRun ? 'brand' : isFailed ? 'warning' : 'muted'}
-              >
-                {hasRun
-                  ? 'Analyzed'
-                  : isAnalyzing
-                    ? 'Analyzing'
-                    : isFailed
-                      ? 'Failed'
-                      : 'Idle'}
-              </Badge>
-            }
-          />
-
-          <CardBody className="space-y-5">
-            <ModalitySelector value={modality} onChange={onModalityChange} />
-
-            <div className="space-y-2">
-              <p className="text-[11px] font-medium tracking-wide text-ink-500 uppercase">
-                Retinal image
-              </p>
-              <ImageDropzone
-                file={file}
-                error={uploadError}
-                onSelect={onSelectImage}
-                onClear={onClearImage}
-              />
-            </div>
-
-            <div className="flex flex-col gap-2 border-t border-line pt-4 sm:flex-row">
-              <Button
-                size="lg"
-                block
-                onClick={onAnalyze}
-                disabled={!hasImage || isAnalyzing}
-                icon={<SparkIcon />}
-              >
-                {isAnalyzing ? 'Analyzing...' : 'Analyze Image'}
-              </Button>
-              <Button
-                variant="secondary"
-                size="lg"
-                onClick={onClearImage}
-                disabled={!hasImage}
-              >
-                Clear
-              </Button>
-            </div>
-
-            <p className="text-[11px] leading-relaxed text-ink-400">
-              {hasImage
-                ? `Ready to analyze with the ${modalityInfo.label} checkpoint (${MODEL_FILE_NAMES[modality]}).`
-                : `Upload a ${modalityInfo.label} capture to enable the Analyze button.`}
-            </p>
-          </CardBody>
-        </Card>
-
-        <Card>
-          <CardHeader
-            title="Image Preview"
-            subtitle={`Local preview of the selected ${modalityInfo.label} capture`}
-          />
-          <CardBody>
-            <ImagePreview
-              previewUrl={previewUrl}
-              fileName={file?.name ?? null}
-              modalityLabel={modalityInfo.label}
-            />
-          </CardBody>
-        </Card>
-      </div>
-
-      <ApiResponseCard
-        payload={response}
-        httpStatus={httpStatus}
-        error={requestError}
-      />
-
-      <div className="grid gap-5 xl:grid-cols-2 xl:items-start">
-        {hasRun ? (
-          <>
-            <PredictionCard
-              modalityLabel={modalityInfo.label}
-              fileName={file?.name ?? null}
-              label={label}
-              confidence={confidence}
-              modelName={prediction?.checkpoint ?? MODEL_FILE_NAMES[modality]}
-              inferenceMs={inferenceMs}
-              description={prediction?.description ?? null}
-            />
-            <ProbabilityCard
-              probabilities={probabilities}
-              predictedIndex={predictedIndex}
-              probabilitySum={probabilitySum}
-            />
-          </>
-        ) : (
-          <div className="xl:col-span-2">
-            <EmptyState
-              icon={<SparkIcon />}
-              title="No analysis yet"
-              description="Choose a modality, upload a retinal image and press Analyze Image. The result, confidence, class probabilities, Grad-CAM and AI report panels appear here."
-              action={
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={onAnalyze}
-                  disabled={!hasImage || isAnalyzing}
-                >
-                  {hasImage ? 'Analyze Image' : 'Upload an image first'}
-                </Button>
-              }
-            />
-          </div>
+        {availability === 'unavailable' || availability === 'error' ? null : (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-[12px] font-medium text-ink-600 ring-1 ring-line">
+            <CheckIcon className="size-3.5 text-emerald-600" />
+            AI Ready
+          </span>
         )}
-      </div>
+      </header>
 
-      <AiReportCard
-        fileName={file?.name ?? null}
-        modality={modality}
-        status={status}
-        prediction={prediction}
-        gradCamAvailable={gradCamAvailable}
-        gradCamPending={gradCamPending}
-        availability={availability}
-        availabilityError={availabilityError}
-        explainStatus={explainStatus}
-        explanation={explanation}
-        explainError={explainError}
-        onGenerate={onGenerateExplanation}
-      />
-    </>
+      <Card>
+        <CardHeader
+          title="Analyze Image"
+          subtitle="Select the imaging modality and upload a retinal image."
+        />
+
+        <CardBody roomy className="space-y-6">
+          <ModalitySelector value={modality} onChange={onModalityChange} />
+
+          <ImageDropzone
+            file={file}
+            previewUrl={previewUrl}
+            modalityLabel={modalityInfo.label}
+            error={uploadError}
+            onSelect={onSelectImage}
+          />
+
+          <Button
+            size="lg"
+            block
+            onClick={onAnalyze}
+            disabled={!hasImage || isAnalyzing}
+            aria-busy={isAnalyzing || undefined}
+            icon={isAnalyzing ? undefined : <SparkIcon />}
+            iconRight={isAnalyzing ? <Spinner tone="light" label="Analyzing" /> : undefined}
+          >
+            {isAnalyzing ? 'Analyzing retinal image...' : 'Analyze Image →'}
+          </Button>
+
+          {isFailed ? (
+            <div
+              role="alert"
+              className="flex flex-col items-start gap-3 rounded-xl bg-red-50 px-4 py-3.5 ring-1 ring-red-200 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="flex items-start gap-2.5">
+                <AlertIcon className="mt-0.5 size-4 shrink-0 text-red-600" />
+                <div>
+                  <p className="text-[14px] font-semibold text-red-800">
+                    {ERROR_TITLE}
+                  </p>
+                  <p className="text-[13px] leading-relaxed text-red-700">
+                    {ERROR_HINT}
+                  </p>
+                </div>
+              </div>
+              <Button variant="secondary" size="sm" onClick={onAnalyze}>
+                Try again
+              </Button>
+            </div>
+          ) : null}
+
+          {!hasImage ? (
+            <p className="flex items-center justify-center gap-1.5 text-[12px] text-ink-400">
+              <UploadIcon className="size-3.5" />
+              Upload an image to enable analysis.
+            </p>
+          ) : null}
+        </CardBody>
+      </Card>
+
+      {status === 'analyzed' ? (
+        <AnalysisResultCard
+          gradeTitle={gradeTitle}
+          modalityLabel={modalityInfo.label}
+          fileName={file?.name ?? null}
+          onViewExplainability={onViewExplainability}
+        />
+      ) : null}
+
+      {prediction ? (
+        <AiExplanationCard
+          status={explainStatus}
+          explanation={explanation}
+          canRetry={availability === 'ready' && explainStatus !== 'loading'}
+          onRetry={onGenerateExplanation}
+        />
+      ) : null}
+    </div>
   )
 }

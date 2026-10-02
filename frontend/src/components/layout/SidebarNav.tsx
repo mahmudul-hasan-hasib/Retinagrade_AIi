@@ -1,21 +1,11 @@
 import { NAV_ITEMS } from '../../data/clinical'
 import type { NavItemId } from '../../types'
-import {
-  DocumentIcon,
-  GridIcon,
-  HistoryIcon,
-  LayersIcon,
-  SettingsIcon,
-  UploadIcon,
-} from '../icons'
+import { CpuIcon, LayersIcon, UploadIcon } from '../icons'
 
 const NAV_ICONS = {
-  dashboard: GridIcon,
   analyze: UploadIcon,
-  history: HistoryIcon,
   explainability: LayersIcon,
-  reports: DocumentIcon,
-  settings: SettingsIcon,
+  model: CpuIcon,
 } as const
 
 export interface SidebarNavProps {
@@ -53,7 +43,6 @@ export function SidebarNav({
               isActive
                 ? 'bg-brand-50 text-brand-800 ring-1 ring-brand-200'
                 : 'text-ink-600 hover:bg-ink-50 hover:text-ink-900',
-              !item.implemented ? 'opacity-70' : '',
             ].join(' ')}
           >
             <Icon
@@ -70,11 +59,6 @@ export function SidebarNav({
                 {item.hint}
               </span>
             </span>
-            {!item.implemented ? (
-              <span className="shrink-0 rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-medium text-ink-500 ring-1 ring-ink-200">
-                Soon
-              </span>
-            ) : null}
           </button>
         )
       })}

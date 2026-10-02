@@ -8,61 +8,54 @@ import type {
 import { LayersIcon } from './components/icons'
 import { AppShell } from './components/layout/AppShell'
 import { Badge } from './components/ui/Badge'
+import { Button } from './components/ui/Button'
 import { Card, CardBody, CardHeader } from './components/ui/Card'
 import { Skeleton } from './components/ui/Feedback'
 import { useImageSelection } from './hooks/useImageSelection'
 import { formatPercent, NO_VALUE } from './lib/format'
 import { AnalyzePage } from './pages/AnalyzePage'
-import { DashboardPage } from './pages/DashboardPage'
-import { ReportsPage } from './pages/ReportsPage'
-import { UnavailablePage } from './pages/UnavailablePage'
+import { ModelPage } from './pages/ModelPage'
 import type {
+  ExplainStatus,
+  GeminiAvailability,
   ModalityKey,
   NavItemId,
   PredictApiResponse,
   PredictionStatus,
 } from './types'
 
+/**
+ * Page titles. The Analyze screen renders its own spacious header with the
+ * readiness pill, so it passes an empty title and does not repeat itself in the
+ * sticky bar.
+ */
 const PAGE_META: Record<NavItemId, { title: string; subtitle: string }> = {
-  dashboard: {
-    title: 'Dashboard',
-    subtitle: 'Screening workspace overview',
-  },
   analyze: {
-    title: 'Analyze Image',
-    subtitle: 'Upload a retinal capture and grade diabetic retinopathy',
-  },
-  history: {
-    title: 'Screening History',
-    subtitle: 'Past studies and PDF export',
+    title: '',
+    subtitle: '',
   },
   explainability: {
     title: 'Explainability',
     subtitle: 'Grad-CAM activation map for the predicted grade',
   },
-  reports: {
-    title: 'AI Reports',
-    subtitle: 'Generated clinical summaries',
-  },
-  settings: {
-    title: 'Settings',
-    subtitle: 'Model selection and inference device',
+  model: {
+    title: 'Model',
+    subtitle: 'Architecture, checkpoints and inference configuration',
   },
 }
 
 /** Lifecycle of the follow-up Grad-CAM call, which is independent of /predict. */
 type GradCamLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 
-/** Lifecycle of `GET /health`, which decides whether Gemini can be offered. */
-type GeminiAvailability = 'unknown' | 'ready' | 'unavailable' | 'error'
-
-/** Lifecycle of `POST /explain`, which runs no model of ours. */
-type ExplainStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
-
 interface GradCamCardProps {
   gradCam: GradCamApiResponse | null
   status: GradCamLoadStatus
   error: string | null
+  /** Local preview of the capture the heatmap explains. */
+  sourcePreviewUrl: string | null
+  sourceFileName: string | null
+  /** Sends the user back to the screen that starts a capture. */
+  onGoToAnalyze: () => void
 }
 
 const GRADCAM_BADGE: Record<
@@ -83,13 +76,23 @@ const GRADCAM_BADGE: Record<
  * is read straight off the response - no grade, confidence or activation is
  * derived here.
  *
- * A Grad-CAM failure is deliberately non-fatal and non-blocking: the grade from
- * `/predict` is already on screen, so a missing heatmap is reported in its own
- * card and never replaces or invalidates the prediction.
+ * This is the single explainability surface in the app and the only place the
+ * XAI parameters live: the Analyze screen links here instead of duplicating
+ * them. A Grad-CAM failure is deliberately non-fatal and non-blocking: the grade
+ * from `/predict` is unaffected, and a missing heatmap is reported in its own
+ * card rather than replacing anything.
  */
-function GradCamCard({ gradCam, status, error }: GradCamCardProps) {
+function GradCamCard({
+  gradCam,
+  status,
+  error,
+  sourcePreviewUrl,
+  sourceFileName,
+  onGoToAnalyze,
+}: GradCamCardProps) {
   const dataUri = gradCam?.cam?.data_uri ?? null
   const hasImage = Boolean(dataUri)
+  const hasSource = Boolean(sourcePreviewUrl)
   const badge = GRADCAM_BADGE[status]
 
   const metadata = [
@@ -123,64 +126,99 @@ function GradCamCard({ gradCam, status, error }: GradCamCardProps) {
       <CardHeader
         icon={<LayersIcon />}
         title="Grad-CAM Heatmap"
-        subtitle="Class activation map for the grade above, computed on the CPU"
-        action={<Badge tone={badge.tone}>{hasImage ? 'Ready' : badge.label}</Badge>}
+        subtitle="Class activation map for the graded capture, computed on the CPU"
+        action={<Badge tone={badge.tone}>{badge.label}</Badge>}
       />
 
       <CardBody className="space-y-4">
-        <div className="relative grid min-h-64 place-items-center overflow-hidden rounded-xl border border-line bg-ink-900 p-3">
-          {hasImage ? (
-            <img
-              src={dataUri ?? ''}
-              alt={`Grad-CAM heatmap explaining the ${gradCam?.label ?? 'predicted'} grade`}
-              className="max-h-64 w-auto rounded-lg object-contain"
-            />
-          ) : null}
-
-          {status === 'loading' ? (
-            <div className="flex w-full max-w-sm flex-col items-center gap-3 py-12 text-center">
-              <div className="w-40">
-                <Skeleton className="h-32 w-full" />
+        <div className="grid gap-4 lg:grid-cols-2">
+          {hasSource ? (
+            <figure className="space-y-2">
+              <figcaption className="text-[11px] font-medium tracking-wide text-ink-500 uppercase">
+                Original capture
+              </figcaption>
+              <div className="grid min-h-64 place-items-center overflow-hidden rounded-xl border border-line bg-ink-900 p-3">
+                <img
+                  src={sourcePreviewUrl ?? ''}
+                  alt={`Uploaded retinal image: ${sourceFileName ?? 'retinal image'}`}
+                  className="max-h-64 w-auto rounded-lg object-contain"
+                />
               </div>
-              <p className="text-xs font-medium text-ink-400">Computing heatmap</p>
-              <p className="text-[11px] leading-relaxed text-ink-500">
-                The backend runs a forward and backward pass over the same
-                checkpoint used for the grade.
-              </p>
-            </div>
+              {sourceFileName ? (
+                <p className="truncate text-[11px] text-ink-400" title={sourceFileName}>
+                  {sourceFileName}
+                </p>
+              ) : null}
+            </figure>
           ) : null}
 
-          {status === 'error' ? (
-            <div className="flex w-full max-w-sm flex-col items-center gap-2 py-12 text-center">
-              <p className="text-xs font-medium text-amber-300">
-                The heatmap could not be produced
-              </p>
-              <p className="text-[11px] leading-relaxed text-ink-500">
-                {error ?? 'The request to /gradcam failed.'}
-              </p>
-              <p className="text-[11px] leading-relaxed text-ink-400">
-                The DR grade above is unaffected.
-              </p>
-            </div>
-          ) : null}
+          <figure className="space-y-2">
+            <figcaption className="text-[11px] font-medium tracking-wide text-ink-500 uppercase">
+              Grad-CAM activation map
+            </figcaption>
+            <div className="relative grid min-h-64 place-items-center overflow-hidden rounded-xl border border-line bg-ink-900 p-3">
+              {hasImage ? (
+                <img
+                  src={dataUri ?? ''}
+                  alt={`Grad-CAM heatmap explaining the ${gradCam?.label ?? 'predicted'} grade`}
+                  className="max-h-64 w-auto rounded-lg object-contain"
+                />
+              ) : null}
 
-          {status === 'idle' ? (
-            <div className="flex w-full max-w-sm flex-col items-center gap-2 py-12 text-center">
-              <span className="grid size-12 place-items-center rounded-2xl bg-white/5 text-ink-400 ring-1 ring-white/10">
-                <LayersIcon className="size-5.5" />
-              </span>
-              <p className="text-sm font-medium text-ink-300">No heatmap yet</p>
-              <p className="text-xs leading-relaxed text-ink-500">
-                Run the analysis to request a Grad-CAM map for the same capture.
-              </p>
-            </div>
-          ) : null}
+              {status === 'loading' ? (
+                <div className="flex w-full max-w-sm flex-col items-center gap-3 py-12 text-center">
+                  <div className="w-40">
+                    <Skeleton className="h-32 w-full" />
+                  </div>
+                  <p className="text-xs font-medium text-ink-400">Computing heatmap</p>
+                  <p className="text-[11px] leading-relaxed text-ink-500">
+                    The backend runs a forward and backward pass over the same
+                    checkpoint used for the grade.
+                  </p>
+                </div>
+              ) : null}
 
-          {hasImage ? (
-            <span className="absolute top-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
-              {gradCam?.target_layer ?? 'Grad-CAM'}
-            </span>
-          ) : null}
+              {status === 'error' ? (
+                <div className="flex w-full max-w-sm flex-col items-center gap-2 py-12 text-center">
+                  <p className="text-xs font-medium text-amber-300">
+                    The heatmap could not be produced
+                  </p>
+                  <p className="text-[11px] leading-relaxed text-ink-500">
+                    {error ?? 'The request to /gradcam failed.'}
+                  </p>
+                  <p className="text-[11px] leading-relaxed text-ink-400">
+                    The DR grade is unaffected.
+                  </p>
+                </div>
+              ) : null}
+
+              {status === 'idle' ? (
+                <div className="flex w-full max-w-sm flex-col items-center gap-2 py-12 text-center">
+                  <span className="grid size-12 place-items-center rounded-2xl bg-white/5 text-ink-400 ring-1 ring-white/10">
+                    <LayersIcon className="size-5.5" />
+                  </span>
+                  <p className="text-sm font-medium text-ink-300">No heatmap yet</p>
+                  <p className="text-xs leading-relaxed text-ink-500">
+                    Run the analysis to request a Grad-CAM map for the same capture.
+                  </p>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={onGoToAnalyze}
+                    className="mt-1"
+                  >
+                    Go to Analyze Image
+                  </Button>
+                </div>
+              ) : null}
+
+              {hasImage ? (
+                <span className="absolute top-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur-sm">
+                  {gradCam?.target_layer ?? 'Grad-CAM'}
+                </span>
+              ) : null}
+            </div>
+          </figure>
         </div>
 
         <div>
@@ -216,31 +254,30 @@ function GradCamCard({ gradCam, status, error }: GradCamCardProps) {
  * Single-page UI shell.
  *
  * The modality, selected image and run status live here rather than inside
- * `AnalyzePage` so that switching to Explainability or AI Reports keeps the
- * same capture on screen instead of resetting the workspace.
+ * `AnalyzePage` so that switching to Explainability or Model keeps the same
+ * capture on screen instead of resetting the workspace.
  *
  * "Analyze Image" is the only place that talks to the API. One click runs
  * `POST /predict` for the DR grade and, once that succeeds, `POST /gradcam` for
  * the heatmap explaining it - same file, same modality. The two responses are
  * stored separately and arrive independently, so a slow or failing heatmap never
- * delays or discards the grade. No grade, confidence, probability or activation
- * is computed in this tree - the panels only project fields the server sent.
+ * delays or discards the grade. `POST /explain` is a third, optional follow-up
+ * that describes the numbers already returned.
+ *
+ * No grade, confidence, probability or activation is computed in this tree - the
+ * screens only project fields the server sent.
  */
 export default function App() {
   const [activeItem, setActiveItem] = useState<NavItemId>('analyze')
   const [modality, setModality] = useState<ModalityKey>('cfp')
   const [status, setStatus] = useState<PredictionStatus>('idle')
   const [response, setResponse] = useState<PredictApiResponse | null>(null)
-  const [httpStatus, setHttpStatus] = useState<number | null>(null)
-  const [requestError, setRequestError] = useState<string | null>(null)
   const [gradCam, setGradCam] = useState<GradCamApiResponse | null>(null)
   const [gradCamStatus, setGradCamStatus] = useState<GradCamLoadStatus>('idle')
   const [gradCamError, setGradCamError] = useState<string | null>(null)
   const [availability, setAvailability] = useState<GeminiAvailability>('unknown')
-  const [availabilityError, setAvailabilityError] = useState<string | null>(null)
   const [explainStatus, setExplainStatus] = useState<ExplainStatus>('idle')
   const [explanation, setExplanation] = useState<ExplainApiResponse | null>(null)
-  const [explainError, setExplainError] = useState<string | null>(null)
   const image = useImageSelection()
 
   /**
@@ -260,14 +297,11 @@ export default function App() {
     requestGeneration.current += 1
     setStatus('idle')
     setResponse(null)
-    setHttpStatus(null)
-    setRequestError(null)
     setGradCam(null)
     setGradCamStatus('idle')
     setGradCamError(null)
     setExplainStatus('idle')
     setExplanation(null)
-    setExplainError(null)
   }, [])
 
   /**
@@ -275,9 +309,8 @@ export default function App() {
    *
    * The flag is a server-side fact that does not change while the page is open,
    * so it is fetched once rather than per request. It runs no model and never
-   * touches the prediction state. A failure here only means the explanation
-   * action stays disabled - it is recorded, not thrown, so the analyze workflow
-   * is unaffected.
+   * touches the prediction state. A failure here only means no explanation is
+   * offered - the screening workflow itself is unaffected.
    */
   useEffect(() => {
     let active = true
@@ -289,15 +322,11 @@ export default function App() {
         }
         setAvailability(result.data.gemini_configured === true ? 'ready' : 'unavailable')
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!active) {
           return
         }
-        const failed = error as { message?: string }
         setAvailability('error')
-        setAvailabilityError(
-          failed.message ?? 'The health check request to the backend failed.',
-        )
       })
 
     return () => {
@@ -321,11 +350,6 @@ export default function App() {
     [image, resetResults],
   )
 
-  const handleClearImage = useCallback(() => {
-    image.clear()
-    resetResults()
-  }, [image, resetResults])
-
   const handleAnalyze = useCallback(async () => {
     const file = image.file
     if (!file) {
@@ -337,8 +361,6 @@ export default function App() {
 
     setStatus('analyzing')
     setResponse(null)
-    setHttpStatus(null)
-    setRequestError(null)
     setGradCam(null)
     setGradCamStatus('idle')
     setGradCamError(null)
@@ -348,19 +370,15 @@ export default function App() {
       if (requestGeneration.current !== generation) {
         return
       }
-      setHttpStatus(result.httpStatus)
       setResponse(result.data)
       setStatus('analyzed')
-    } catch (error) {
+    } catch {
       if (requestGeneration.current !== generation) {
         return
       }
-      const failed = error as { httpStatus?: number; message?: string }
-      setHttpStatus(failed.httpStatus ?? null)
+      // The reason stays in the API client: the screen shows fixed, friendly
+      // copy instead of a transport code or a server message.
       setResponse(null)
-      setRequestError(
-        failed.message ?? 'The request to the backend failed for an unknown reason.',
-      )
       setStatus('error')
       return
     }
@@ -422,18 +440,15 @@ export default function App() {
     }
 
     if (typeof prediction.predicted_class !== 'number' || typeof prediction.confidence !== 'number') {
+      // Nothing to describe: the endpoint explains numbers, and there are none.
       setExplainStatus('error')
       setExplanation(null)
-      setExplainError(
-        'The prediction result is missing its class or confidence, so there is nothing to explain.',
-      )
       return
     }
 
     if (availability !== 'ready') {
       setExplainStatus('unavailable')
       setExplanation(null)
-      setExplainError(null)
       return
     }
 
@@ -469,7 +484,7 @@ export default function App() {
     }
 
     setExplainStatus('loading')
-    setExplainError(null)
+    setExplanation(null)
 
     try {
       const result = await requestExplanation(payload)
@@ -478,25 +493,18 @@ export default function App() {
       }
       setExplanation(result.data)
       setExplainStatus('ready')
-    } catch (error) {
+    } catch {
       if (requestGeneration.current !== generation) {
         return
       }
-      const failed = error as { httpStatus?: number; message?: string }
+      // The reason stays in the API client: the screen shows fixed, friendly
+      // copy and keeps the grade that is already final.
       setExplanation(null)
-      setExplainError(failed.message ?? 'The request to /explain failed.')
       setExplainStatus('error')
     }
   }, [response, status, modality, availability, gradCam])
 
   const meta = PAGE_META[activeItem]
-
-  /**
-   * Whether a real heatmap exists for the current capture. Derived from the
-   * response rather than the status alone, so a "ready" state with no image can
-   * never be reported to `/explain` as available Grad-CAM evidence.
-   */
-  const gradCamReady = gradCamStatus === 'ready' && Boolean(gradCam?.cam?.data_uri)
 
   return (
     <AppShell
@@ -506,70 +514,41 @@ export default function App() {
       subtitle={meta.subtitle}
     >
       {activeItem === 'analyze' ? (
-        <>
-          <AnalyzePage
-            modality={modality}
-            onModalityChange={handleModalityChange}
-            file={image.file}
-            previewUrl={image.previewUrl}
-            uploadError={image.error}
-            onSelectImage={handleSelectImage}
-            onClearImage={handleClearImage}
-            status={status}
-            response={response}
-            httpStatus={httpStatus}
-            requestError={requestError}
-            onAnalyze={handleAnalyze}
-            gradCamAvailable={gradCamReady}
-            gradCamPending={gradCamStatus === 'loading'}
-            availability={availability}
-            availabilityError={availabilityError}
-            explainStatus={explainStatus}
-            explanation={explanation}
-            explainError={explainError}
-            onGenerateExplanation={handleGenerateExplanation}
-          />
+        <AnalyzePage
+          modality={modality}
+          onModalityChange={handleModalityChange}
+          file={image.file}
+          previewUrl={image.previewUrl}
+          uploadError={image.error}
+          onSelectImage={handleSelectImage}
+          status={status}
+          response={response}
+          onAnalyze={handleAnalyze}
+          gradCamPending={gradCamStatus === 'loading'}
+          availability={availability}
+          explainStatus={explainStatus}
+          explanation={explanation}
+          onGenerateExplanation={handleGenerateExplanation}
+          onViewExplainability={() => setActiveItem('explainability')}
+        />
+      ) : null}
 
-          {/* The single real Grad-CAM surface, drawn directly below the analyze
-              workflow. It is the only explainability panel in the app. */}
+      {activeItem === 'explainability' ? (
+        <div className="mx-auto w-full max-w-[1180px]">
           <GradCamCard
             gradCam={gradCam}
             status={gradCamStatus}
             error={gradCamError}
+            sourcePreviewUrl={image.previewUrl}
+            sourceFileName={image.file?.name ?? null}
+            onGoToAnalyze={() => setActiveItem('analyze')}
           />
-        </>
+        </div>
       ) : null}
 
-      {activeItem === 'dashboard' ? <DashboardPage /> : null}
-
-      {activeItem === 'explainability' ? (
-        <GradCamCard
-          gradCam={gradCam}
-          status={gradCamStatus}
-          error={gradCamError}
-        />
+      {activeItem === 'model' ? (
+        <ModelPage prediction={response?.prediction ?? null} gradCam={gradCam} />
       ) : null}
-
-      {activeItem === 'reports' ? (
-        <ReportsPage
-          fileName={image.file?.name ?? null}
-          modality={modality}
-          status={status}
-          prediction={response?.prediction ?? null}
-          gradCamAvailable={gradCamReady}
-          gradCamPending={gradCamStatus === 'loading'}
-          availability={availability}
-          availabilityError={availabilityError}
-          explainStatus={explainStatus}
-          explanation={explanation}
-          explainError={explainError}
-          onGenerateExplanation={handleGenerateExplanation}
-        />
-      ) : null}
-
-      {activeItem === 'history' ? <UnavailablePage itemId="history" /> : null}
-
-      {activeItem === 'settings' ? <UnavailablePage itemId="settings" /> : null}
     </AppShell>
   )
 }
