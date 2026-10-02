@@ -7,6 +7,7 @@ Endpoint      Purpose                                                  Model run
 ``GET  /health``  Liveness + device/CUDA facts                         NO
 ``POST /predict``  Real DR grading of an uploaded image                **YES**
 ``POST /gradcam``  Grad-CAM heatmap for an uploaded image              **YES**
+``POST /explain``  Gemini prose explanation of a prediction            NO
 ============  =====================================================  =============
 
 ``POST /predict`` validates the upload and then calls
@@ -24,12 +25,22 @@ pixels that drove it, at the trunk's last convolutional stage ``features.8``.
 The heatmap is returned as a base64-encoded PNG data URI inside the JSON body,
 so the grade and the image that explains it arrive in a single response.
 
+``POST /explain`` runs **no** model of ours. It takes the structured output the
+caller already has - modality, grade, confidence, 5-class probabilities and
+optional Grad-CAM facts - and asks Gemini to describe it in prose
+(``services/gemini.py``). Gemini never sees the image and never sees a grade
+it did not receive, and the caller's numbers are echoed back verbatim so the
+explanation provably cannot have altered them. The key is read from the
+environment and never leaves the server.
+
 Domain errors from the inference layer carry their own ``code`` and
 ``http_status`` (``inference/exceptions.py``) and are translated here into the
-``{"success": false, "error": {...}}`` envelope. They never leak a traceback.
+``{"success": false, "error": {...}}`` envelope. ``services.gemini`` uses the
+same ``code`` / ``http_status`` convention so its failures read identically.
+Neither ever leaks a traceback.
 
 Still **not** implemented, by instruction:
-  * Gemini report generation, PDF export, screening history
+  * PDF export, screening history, report storage
   * dataset evaluation or accuracy calculation
   * Grad-CAM overlay compositing onto the source photograph: the heatmap is
     returned on its own, in the model-input frame, not blended with the image
@@ -50,10 +61,12 @@ import base64
 import io
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import numpy as np
 import torch
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -68,12 +81,18 @@ from schemas.api import (
     HealthResponse,
     RootResponse,
 )
+from services import gemini
+
+# Load backend/.env before anything reads GEMINI_API_KEY. Existing environment
+# variables win, so a real deployment env is never silently overridden by a local
+# file. The key stays in the process environment and is never returned or logged.
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("retinagrade")
 
 APP_NAME = "RetinaGrade AI"
-API_VERSION = "0.5.0-dev"
+API_VERSION = "0.6.0-dev"
 
 #: CPU is mandatory. CUDA is reported but never used.
 DEVICE = "cpu"
@@ -111,7 +130,8 @@ app = FastAPI(
     description=(
         "Backend API for diabetic retinopathy screening (CFP / UWF), CPU only. "
         "POST /predict runs the real trained model; POST /gradcam returns a "
-        "Grad-CAM heatmap for the same model. Report generation is not implemented."
+        "Grad-CAM heatmap for the same model; POST /explain renders a prediction "
+        "as prose via Gemini without re-running any model."
     ),
 )
 
@@ -220,6 +240,104 @@ class GradCamResponse(BaseModel):
     cam: GradCamImage
 
 
+# --------------------------------------------------------------------------- #
+# POST /explain
+# --------------------------------------------------------------------------- #
+
+
+class GradCamEvidence(BaseModel):
+    """Optional Grad-CAM facts from a prior ``POST /gradcam`` call.
+
+    Metadata only. The base64 heatmap is deliberately **not** accepted here:
+    sending megabytes of pixels to a third-party API for a text summary would be
+    a needless privacy cost, and Gemini never needs them - it is told only that a
+    map exists and how strong its gradients were.
+    """
+
+    available: bool = Field(
+        default=False,
+        description="False when /gradcam failed or was not run for this image.",
+    )
+    target_layer: Optional[str] = Field(default=None, examples=["features.8"])
+    grid_shape: Optional[List[int]] = Field(default=None, examples=[[7, 7]])
+    image_size: Optional[int] = Field(default=None, examples=[224])
+    gradients_are_nonzero: Optional[bool] = Field(default=None, examples=[True])
+    is_predicted_class: Optional[bool] = Field(
+        default=None,
+        description="False when the heatmap explains a grade other than the prediction.",
+    )
+    summary: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional backend-written sentence about the heatmap, e.g. that the "
+            "gradients were strong and concentrated centrally."
+        ),
+    )
+
+
+class ExplainRequest(BaseModel):
+    """Body of ``POST /explain``: exactly what ``POST /predict`` already returned.
+
+    Field types stay permissive on purpose so that range and content problems are
+    reported through this API's own ``{"success": false, "error": {...}}``
+    envelope with a useful ``code``, instead of FastAPI's bare
+    ``{"detail": [...]}`` 422. Only a genuinely malformed type (a string where a
+    number belongs) is left to Pydantic.
+
+    ``modality`` accepts any casing or surrounding whitespace and is normalised
+    by the handler, matching ``/predict`` and ``/gradcam``.
+    """
+
+    modality: str = Field(examples=["CFP"], description="Imaging modality: 'cfp' or 'uwf'.")
+    predicted_class: int = Field(description="DR grade index 0-4 from /predict.")
+    confidence: float = Field(description="Top-class probability, 0-1, from /predict.")
+    probabilities: Dict[str, float] = Field(
+        description="Full 5-class ICDR distribution keyed by grade label.",
+    )
+    gradcam: Optional[GradCamEvidence] = Field(
+        default=None,
+        description="Optional metadata from a prior /gradcam call.",
+    )
+
+
+class ExplainSource(BaseModel):
+    """The caller's numbers, echoed back unchanged.
+
+    This is the audit trail for the one rule this endpoint exists to enforce: the
+    explanation is generated *from* these values and cannot have changed them.
+    Compare ``source.confidence`` with the value sent in the request - they are
+    the same object.
+    """
+
+    modality: str
+    predicted_class: int
+    label: str
+    description: str
+    confidence: float
+    probabilities: Dict[str, float]
+    gradcam_available: bool
+
+
+class ExplainResponse(BaseModel):
+    """Body of a successful ``POST /explain``.
+
+    ``explanation`` is Gemini's prose. ``disclaimer`` is fixed server text that
+    is appended regardless of what the model returned, so it cannot be dropped by
+    truncation or a refusal. ``model`` names the Gemini model that produced the
+    text, for provenance. ``latency_ms`` measures the Gemini call only - no model
+    of ours runs here.
+    """
+
+    success: Literal[True] = True
+    explanation: str
+    #: Fixed, not model-generated. Always present.
+    disclaimer: str
+    model: str = Field(examples=[gemini.DEFAULT_GEMINI_MODEL])
+    modality: str = Field(examples=["CFP"])
+    latency_ms: float = Field(examples=[2410.7])
+    source: ExplainSource
+
+
 @app.exception_handler(Exception)
 async def _unexpected_error_handler(_request, exc: Exception) -> JSONResponse:
     # Log the traceback server-side; never send it to the client.
@@ -243,11 +361,17 @@ def health() -> HealthResponse:
 
     ``cuda_available`` is reported for transparency only. Nothing in this
     project ever selects a CUDA device.
+
+    ``gemini_configured`` is a bare boolean telling a client whether
+    ``POST /explain`` is usable here, so the UI can say "not configured on this
+    server" up front instead of letting the user click into a 503. No key, key
+    length or key fragment is exposed.
     """
     return HealthResponse(
         status="healthy",
         device=DEVICE,
         cuda_available=torch.cuda.is_available(),
+        gemini_configured=gemini.is_available(),
     )
 
 
@@ -384,14 +508,18 @@ def _cam_to_png_data_uri(cam: torch.Tensor) -> tuple[str, int, int]:
 async def gradcam_image(
     image: UploadFile = File(..., description="Retinal image (CFP or UWF)."),
     modality: str = Form(..., description="Imaging modality: 'cfp' or 'uwf'."),
+    # No ``ge``/``le`` here on purpose. Constraining the form field would make
+    # FastAPI reject an out-of-range grade during request validation and answer
+    # with its own bare ``{"detail": [...]}`` 422, before this function ever
+    # runs. Leaving the value unconstrained lets the explicit check below stay the
+    # single source of truth and return the documented
+    # ``400 invalid_target_class`` envelope instead.
     target_class: Optional[int] = Form(
         None,
         description=(
             "DR grade (0-4) the heatmap should explain. Omit to explain the "
             "model's own prediction."
         ),
-        ge=0,
-        le=4,
     ),
 ) -> GradCamResponse:
     """Validate the upload, then produce a real Grad-CAM heatmap on the CPU.
@@ -518,8 +646,180 @@ async def gradcam_image(
     )
 
 
+def _normalise_gradcam_evidence(evidence: Optional[GradCamEvidence]) -> Optional[Dict[str, Any]]:
+    """Reduce Grad-CAM metadata to the small dict the prompt builder expects."""
+    if evidence is None:
+        return None
+    return {
+        "available": bool(evidence.available),
+        "target_layer": evidence.target_layer,
+        "grid_shape": list(evidence.grid_shape) if evidence.grid_shape else None,
+        "image_size": evidence.image_size,
+        "gradients_are_nonzero": evidence.gradients_are_nonzero,
+        "is_predicted_class": evidence.is_predicted_class,
+        "summary": evidence.summary,
+    }
+
+
+@app.post(
+    "/explain",
+    response_model=ExplainResponse,
+    tags=["explanation"],
+    summary="Explain a prediction in prose using Gemini (no model of ours is run)",
+    responses={
+        400: {"description": "Invalid modality, class, confidence or probability distribution"},
+        422: {"description": "Malformed request body"},
+        502: {"description": "Gemini refused the request or returned nothing usable"},
+        503: {"description": "Gemini is not configured on this server"},
+    },
+)
+async def explain_prediction(request: ExplainRequest) -> Any:
+    """Turn the output of ``/predict`` into a short clinician-facing explanation.
+
+    **No model of ours runs here.** The caller posts the numbers it already has
+    and this endpoint only describes them, so it never disagrees with
+    ``/predict``: the grade, confidence and distribution in the response are
+    copies of the request, returned under ``source``.
+
+    Gemini receives the structured numbers and optional Grad-CAM metadata - never
+    the retinal image, and never a grade it did not receive. It is instructed to
+    explain rather than diagnose; ``services/gemini.py`` holds that prompt. The
+    heatmap bitmap is deliberately not accepted, only the fact that a map exists
+    and how strong its gradients were, so no pixels leave the machine.
+
+    The API key is read from the server's environment. When it is missing the
+    endpoint answers ``503 gemini_not_configured`` and says so plainly, rather
+    than failing obscurely or silently degrading to canned text. ``/predict`` and
+    ``/gradcam`` are unaffected either way.
+
+    Every returned explanation carries :data:`services.gemini.DISCLAIMER` as fixed
+    server text, not model output.
+    """
+    key = (request.modality or "").strip().lower()
+    if key not in SUPPORTED_MODALITIES:
+        return _error(
+            400,
+            "unsupported_modality",
+            f"Unsupported modality {request.modality!r}. Allowed values: {', '.join(SUPPORTED_MODALITIES)}.",
+        )
+
+    if not 0 <= request.predicted_class < EXPECTED_CLASS_COUNT:
+        return _error(
+            400,
+            "invalid_predicted_class",
+            f"predicted_class must be between 0 and {EXPECTED_CLASS_COUNT - 1}, "
+            f"got {request.predicted_class}.",
+        )
+
+    # A confidence outside [0, 1] means the caller is not sending real /predict
+    # output, and a probability outside [0, 1] means a corrupted payload. Both
+    # would produce a confidently wrong explanation, so they are rejected here.
+    if not 0.0 <= request.confidence <= 1.0:
+        return _error(
+            400,
+            "invalid_confidence",
+            f"confidence must be between 0.0 and 1.0, got {request.confidence}.",
+        )
+
+    probabilities = request.probabilities or {}
+    expected_keys = set(_DR_LABELS)
+    received_keys = set(probabilities)
+    if received_keys != expected_keys:
+        missing = sorted(expected_keys - received_keys)
+        unexpected = sorted(received_keys - expected_keys)
+        return _error(
+            400,
+            "invalid_probabilities",
+            "probabilities must contain exactly the {} grade labels. Missing: {}. Unexpected: {}.".format(
+                EXPECTED_CLASS_COUNT,
+                ", ".join(missing) if missing else "none",
+                ", ".join(unexpected) if unexpected else "none",
+            ),
+        )
+    for label, value in probabilities.items():
+        if not 0.0 <= value <= 1.0:
+            return _error(
+                400,
+                "invalid_probabilities",
+                f"Probability for {label!r} must be between 0.0 and 1.0, got {value}.",
+            )
+
+    index = request.predicted_class
+    label = _DR_LABELS[index]
+    description = _DR_DESCRIPTIONS[index]
+    gradcam = _normalise_gradcam_evidence(request.gradcam)
+
+    try:
+        prompt = gemini.build_prompt(
+            modality=key,
+            predicted_class=index,
+            label=label,
+            description=description,
+            confidence=request.confidence,
+            probabilities=probabilities,
+            class_order=list(_DR_LABELS),
+            gradcam=gradcam,
+        )
+        settings = gemini.load_settings(require_key=True)
+    except gemini.ExplanationError as exc:
+        logger.warning("POST /explain refused: %s: %s", type(exc).__name__, exc)
+        return _error(exc.http_status, exc.code, str(exc))
+
+    started = time.perf_counter()
+    try:
+        # Network + model latency, so a worker thread keeps the event loop free.
+        explanation = await run_in_threadpool(gemini.generate_explanation, prompt, settings)
+    except gemini.ExplanationError as exc:
+        logger.warning("POST /explain failed (%s): %s", type(exc).__name__, exc)
+        return _error(exc.http_status, exc.code, str(exc))
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+
+    if not explanation.strip():
+        return _error(
+            502,
+            "gemini_empty_response",
+            "Gemini returned an empty explanation. The prediction itself is unaffected.",
+        )
+
+    logger.info(
+        "POST /explain: modality=%s, class=%d (%s), confidence=%.6f, gradcam=%s, "
+        "model=%s, %d chars in %.1f ms",
+        key,
+        index,
+        label,
+        request.confidence,
+        "yes" if (gradcam and gradcam.get("available")) else "no",
+        settings.model if settings else "unknown",
+        len(explanation),
+        elapsed_ms,
+    )
+
+    return ExplainResponse(
+        success=True,
+        explanation=explanation,
+        # Fixed server text, appended whatever the model returned.
+        disclaimer=gemini.DISCLAIMER,
+        model=settings.model if settings else gemini.DEFAULT_GEMINI_MODEL,
+        modality=key,
+        latency_ms=round(elapsed_ms, 2),
+        source=ExplainSource(
+            modality=key,
+            predicted_class=index,
+            label=label,
+            description=description,
+            confidence=request.confidence,
+            probabilities=probabilities,
+            gradcam_available=bool(gradcam and gradcam.get("available")),
+        ),
+    )
+
+
 __all__ = [
     "app",
+    "ExplainRequest",
+    "ExplainResponse",
+    "ExplainSource",
+    "GradCamEvidence",
     "GradCamImage",
     "GradCamResponse",
     "PredictionModel",

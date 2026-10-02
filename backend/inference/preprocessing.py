@@ -18,6 +18,28 @@ Checkpoint                   ``config`` What it stores about preprocessing
                                          normalization and no colour mode.
 ============================  ========  ====================================
 
+Why the CFP input size is not recoverable from the checkpoint
+-------------------------------------------------------------
+This was investigated exhaustively, not skipped. Every top-level value in
+``EfficientNetB0_CFP_final.pth`` was dumped and inspected:
+
+* ``epoch = 12`` - a scalar.
+* ``best_val_qwk = 0.9225706931411989`` - a scalar.
+* ``model_state_dict`` - 374 tensors, all weights.
+* ``history`` - a list of 12 per-epoch dicts. The keys of every entry are exactly
+  ``epoch``, ``lr``, ``train_total_loss``, ``train_dr_loss``,
+  ``train_lesion_loss``, ``val_total_loss``, ``val_dr_loss``,
+  ``val_lesion_loss``, ``val_QWK``, ``val_Macro_F1`` and ``val_Accuracy``. These
+  are training metrics only; no transform, tensor shape or size is recorded.
+
+There is no ``config`` key, no ``optimizer_state_dict``, no
+``scheduler_state_dict`` and no ``scaler_state_dict`` (the UWF file has all three
+of those plus its config). The architecture cannot encode the size either: both
+models are ``efficientnet_b0`` with global average pooling, which accepts any
+input resolution. **The CFP training input size is therefore unrecoverable from
+the artifacts that exist.** It has to be an assumption, and saying so is the only
+honest option; silently picking a number and presenting it as fact would be worse.
+
 ASSUMPTION - CFP input size and normalization
 ---------------------------------------------
 Because the CFP checkpoint stores no preprocessing configuration, both values
@@ -34,8 +56,19 @@ below are **assumptions, not facts read from the checkpoint**:
   wrong size and accuracy will suffer. EfficientNet-B0 is fully convolutional
   with global average pooling, so any size runs without erroring -- a wrong
   size fails silently, which is exactly why this is reported rather than
-  hidden. Override it with :func:`with_image_size` (the CLI exposes
+  hidden.
+
+Two supported ways to correct it, neither of which touches the weights:
+
+* set the ``CFP_IMAGE_SIZE`` environment variable (read per call by
+  :func:`get_config`, CFP only), or
+* override it in-process with :func:`with_image_size` (the CLI exposes
   ``--image-size``).
+
+An override from either source still reports ``verified=False`` and says so in
+``config_source``, because a human-supplied value is not checkpoint data. UWF is
+deliberately *not* overridable this way: its size is checkpoint-confirmed, so
+silently replacing it would throw away real evidence.
 
 For UWF the size is not an assumption: 512 is read out of the checkpoint at load
 time by :func:`get_config`.
@@ -48,7 +81,9 @@ are stale labels written by the training script, so the dict is not internally
 consistent. ``image_size`` / ``normalization`` are read from it anyway because
 they are the only preprocessing evidence in either file, but the inconsistency
 is why the CFP defaults are treated as assumptions rather than inferred from
-the UWF config.
+the UWF config. The two files also came from visibly different training scripts
+(the CFP ``history`` is a list, the UWF ``history`` a dict, and only the UWF one
+records ``val_macro_auc``), which is the likely cause.
 
 Inference-time transforms are deliberately minimal. The checkpoints were trained
 with ``RandomHorizontalFlip(p=0.5) + RandomRotation(10)``, which is
@@ -59,6 +94,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, Optional, Union
@@ -88,6 +124,12 @@ CHECKPOINT_IMAGE_SIZE = 512
 DEFAULT_IMAGE_SIZE = 224
 IMAGENET_INPUT_SIZE = 224
 
+#: Environment variable that overrides :data:`DEFAULT_IMAGE_SIZE` for CFP.
+#: CFP is the only modality this applies to, because it is the only one whose
+#: size the checkpoint does not state. Set it to the real CFP training size if it
+#: ever becomes known; nothing about the weights or the model changes.
+CFP_IMAGE_SIZE_ENV = "CFP_IMAGE_SIZE"
+
 #: Per-modality defaults. ``source`` documents where the values came from and
 #: ``verified`` says whether they were read out of the checkpoint or assumed.
 _DEFAULTS: Dict[str, Dict[str, Any]] = {
@@ -100,7 +142,8 @@ _DEFAULTS: Dict[str, Dict[str, Any]] = {
             "image size and normalization below are not read from the checkpoint. "
             "ImageNet statistics match the sibling UWF run; 224 is the canonical "
             "EfficientNet-B0 input. The UWF checkpoint used 512 - if CFP also "
-            "trained at 512 this default is wrong and accuracy will suffer."
+            "trained at 512 this default is wrong and accuracy will suffer. "
+            "Set CFP_IMAGE_SIZE to correct it without touching the weights."
         ),
         "verified": False,
     },
@@ -161,6 +204,40 @@ def _resolve_base(modality: str) -> Dict[str, Any]:
     return _DEFAULTS[key]
 
 
+def _env_image_size(modality: str) -> Optional[int]:
+    """Return a valid ``CFP_IMAGE_SIZE`` override, or ``None``.
+
+    Read on every call rather than at import time so that the value can be
+    changed between requests (and so tests do not need to reimport the module).
+    Anything that is not a positive integer is ignored with a warning rather
+    than raised: a typo in an optional override must not break inference.
+    """
+    raw = os.environ.get(CFP_IMAGE_SIZE_ENV)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        size = int(raw.strip())
+    except ValueError:
+        logger.warning(
+            "Ignoring %s=%r: expected a positive integer. Using the default of %d for %s.",
+            CFP_IMAGE_SIZE_ENV,
+            raw,
+            DEFAULT_IMAGE_SIZE,
+            modality,
+        )
+        return None
+    if size <= 0:
+        logger.warning(
+            "Ignoring %s=%r: expected a positive integer. Using the default of %d for %s.",
+            CFP_IMAGE_SIZE_ENV,
+            raw,
+            DEFAULT_IMAGE_SIZE,
+            modality,
+        )
+        return None
+    return size
+
+
 def get_config(modality: str, checkpoint_config: Optional[Dict[str, Any]] = None) -> PreprocessConfig:
     """Build the preprocessing config for ``modality``.
 
@@ -169,6 +246,9 @@ def get_config(modality: str, checkpoint_config: Optional[Dict[str, Any]] = None
     documented default and flips ``verified`` to True. When the checkpoint has
     no ``config`` (the CFP case) the documented assumption is returned with
     ``verified=False`` so the caller can report it as an assumption.
+
+    Precedence is checkpoint config > ``CFP_IMAGE_SIZE`` env var > documented
+    default. An override at any level leaves ``verified=False``.
     """
     key = (modality or "").strip().lower()
     base = dict(_resolve_base(key))
@@ -192,6 +272,25 @@ def get_config(modality: str, checkpoint_config: Optional[Dict[str, Any]] = None
             verified = False
         elif normalization and not verified:
             source += "; normalization read from checkpoint, image size assumed"
+
+    # The checkpoint wins: never let an operator override overwrite recorded
+    # checkpoint evidence. Only UWF has such evidence, so in practice this
+    # applies to CFP alone.
+    if not verified:
+        override = _env_image_size(key)
+        if override is not None and override != base["image_size"]:
+            logger.warning(
+                "Using %s=%d for %s, overriding the default of %d. This is still "
+                "an ASSUMPTION, not checkpoint data.",
+                CFP_IMAGE_SIZE_ENV,
+                override,
+                key,
+                base["image_size"],
+            )
+            source = "%s overridden via %s=%d" % (source, CFP_IMAGE_SIZE_ENV, override)
+            base["image_size"] = override
+        elif override is not None:
+            source = "%s (%s=%d, same as the default)" % (source, CFP_IMAGE_SIZE_ENV, override)
 
     if not verified:
         logger.warning(
@@ -297,6 +396,7 @@ def load_image_file(path: Union[str, Path], modality: str) -> torch.Tensor:
 
 
 __all__ = [
+    "CFP_IMAGE_SIZE_ENV",
     "CHECKPOINT_IMAGE_SIZE",
     "DEFAULT_IMAGE_SIZE",
     "IMAGENET_MEAN",

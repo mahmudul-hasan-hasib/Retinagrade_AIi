@@ -19,12 +19,17 @@ uvicorn[standard]==0.54.0
 python-multipart==0.0.32
 python-dotenv==1.2.3
 
+# --- AI-assisted explanation (POST /explain) ---
+# Official Google Gemini SDK. Optional at runtime: if it is missing, or if
+# GEMINI_API_KEY is empty, /explain answers 503 gemini_not_configured and the
+# prediction endpoints (/predict, /gradcam) are unaffected.
+google-genai==2.28.0
+
 # --- Imaging / preprocessing ---
 numpy==2.2.6
 pillow==12.3.0
 opencv-python==5.0.0.93
 
 # --- Added later (not installed) ---
-# google-genai          # optional Gemini report generation
 # reportlab             # PDF report export
 # pytest, httpx         # test suite
