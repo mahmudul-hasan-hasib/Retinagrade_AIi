@@ -1,10 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchHealth, predictImage, requestExplanation, requestGradCam } from './api/client'
-import type {
-  ExplainApiRequest,
-  ExplainApiResponse,
-  GradCamApiResponse,
-} from './api/client'
+import { useCallback, useRef, useState } from 'react'
+import { predictImage, requestGradCam } from './api/client'
+import type { GradCamApiResponse } from './api/client'
 import { LayersIcon } from './components/icons'
 import { AppShell } from './components/layout/AppShell'
 import { Badge } from './components/ui/Badge'
@@ -16,8 +12,6 @@ import { formatPercent, NO_VALUE } from './lib/format'
 import { AnalyzePage } from './pages/AnalyzePage'
 import { ModelPage } from './pages/ModelPage'
 import type {
-  ExplainStatus,
-  GeminiAvailability,
   ModalityKey,
   NavItemId,
   PredictApiResponse,
@@ -25,9 +19,10 @@ import type {
 } from './types'
 
 /**
- * Page titles. The Analyze screen renders its own spacious header with the
- * readiness pill, so it passes an empty title and does not repeat itself in the
- * sticky bar.
+ * Page titles for the sticky bar.
+ *
+ * The Analyze screen renders its own spacious header, so it passes an empty
+ * title and does not repeat itself up top.
  */
 const PAGE_META: Record<NavItemId, { title: string; subtitle: string }> = {
   analyze: {
@@ -137,7 +132,7 @@ function GradCamCard({
               <figcaption className="text-[11px] font-medium tracking-wide text-ink-500 uppercase">
                 Original capture
               </figcaption>
-              <div className="grid min-h-64 place-items-center overflow-hidden rounded-xl border border-line bg-ink-900 p-3">
+              <div className="grid min-h-64 place-items-center overflow-hidden rounded-xl border border-line bg-black p-3 ring-1 ring-white/5">
                 <img
                   src={sourcePreviewUrl ?? ''}
                   alt={`Uploaded retinal image: ${sourceFileName ?? 'retinal image'}`}
@@ -156,7 +151,9 @@ function GradCamCard({
             <figcaption className="text-[11px] font-medium tracking-wide text-ink-500 uppercase">
               Grad-CAM activation map
             </figcaption>
-            <div className="relative grid min-h-64 place-items-center overflow-hidden rounded-xl border border-line bg-ink-900 p-3">
+            {/* True black behind both frames: the photograph and the heatmap are
+                read as images, so nothing about their surroundings may tint them. */}
+            <div className="relative grid min-h-64 place-items-center overflow-hidden rounded-xl border border-line bg-black p-3 ring-1 ring-white/5">
               {hasImage ? (
                 <img
                   src={dataUri ?? ''}
@@ -197,7 +194,7 @@ function GradCamCard({
                   <span className="grid size-12 place-items-center rounded-2xl bg-white/5 text-ink-400 ring-1 ring-white/10">
                     <LayersIcon className="size-5.5" />
                   </span>
-                  <p className="text-sm font-medium text-ink-300">No heatmap yet</p>
+                  <p className="text-sm font-medium text-ink-600">No heatmap yet</p>
                   <p className="text-xs leading-relaxed text-ink-500">
                     Run the analysis to request a Grad-CAM map for the same capture.
                   </p>
@@ -229,7 +226,7 @@ function GradCamCard({
             {metadata.map((entry) => (
               <div
                 key={entry.label}
-                className="rounded-lg bg-ink-50/70 px-2.5 py-2 ring-1 ring-line"
+                className="rounded-lg bg-white/[0.03] px-2.5 py-2 ring-1 ring-line"
               >
                 <dt className="truncate text-[11px] text-ink-500">{entry.label}</dt>
                 <dd className="mt-0.5 font-mono text-xs font-medium text-ink-700">
@@ -261,8 +258,7 @@ function GradCamCard({
  * `POST /predict` for the DR grade and, once that succeeds, `POST /gradcam` for
  * the heatmap explaining it - same file, same modality. The two responses are
  * stored separately and arrive independently, so a slow or failing heatmap never
- * delays or discards the grade. `POST /explain` is a third, optional follow-up
- * that describes the numbers already returned.
+ * delays or discards the grade.
  *
  * No grade, confidence, probability or activation is computed in this tree - the
  * screens only project fields the server sent.
@@ -275,9 +271,6 @@ export default function App() {
   const [gradCam, setGradCam] = useState<GradCamApiResponse | null>(null)
   const [gradCamStatus, setGradCamStatus] = useState<GradCamLoadStatus>('idle')
   const [gradCamError, setGradCamError] = useState<string | null>(null)
-  const [availability, setAvailability] = useState<GeminiAvailability>('unknown')
-  const [explainStatus, setExplainStatus] = useState<ExplainStatus>('idle')
-  const [explanation, setExplanation] = useState<ExplainApiResponse | null>(null)
   const image = useImageSelection()
 
   /**
@@ -300,38 +293,6 @@ export default function App() {
     setGradCam(null)
     setGradCamStatus('idle')
     setGradCamError(null)
-    setExplainStatus('idle')
-    setExplanation(null)
-  }, [])
-
-  /**
-   * Read `gemini_configured` from `GET /health` once on load.
-   *
-   * The flag is a server-side fact that does not change while the page is open,
-   * so it is fetched once rather than per request. It runs no model and never
-   * touches the prediction state. A failure here only means no explanation is
-   * offered - the screening workflow itself is unaffected.
-   */
-  useEffect(() => {
-    let active = true
-
-    fetchHealth()
-      .then((result) => {
-        if (!active) {
-          return
-        }
-        setAvailability(result.data.gemini_configured === true ? 'ready' : 'unavailable')
-      })
-      .catch(() => {
-        if (!active) {
-          return
-        }
-        setAvailability('error')
-      })
-
-    return () => {
-      active = false
-    }
   }, [])
 
   const handleModalityChange = useCallback(
@@ -409,101 +370,6 @@ export default function App() {
     }
   }, [image.file, modality])
 
-  /**
-   * Ask Gemini to explain the prediction that is already on screen.
-   *
-   * Only the numbers `/predict` returned are sent - modality, predicted class,
-   * confidence and the full 5-class distribution - plus Grad-CAM *metadata*
-   * from `/gradcam` when a heatmap exists. The heatmap bitmap is deliberately
-   * not included, and no image is re-uploaded: `/explain` runs no model of ours
-   * and only describes what it is given.
-   *
-   * Two guards, in order:
-   *   1. there must be a graded prediction with a class and a confidence to
-   *      describe - the endpoint explains numbers, so it cannot run before that;
-   *   2. `GET /health` must have reported `gemini_configured: true`. Anything
-   *      else - false, absent or unreadable - is treated as "not known to be
-   *      configured" and never as permission, so a server with no key is
-   *      reported as unavailable instead of being sent a request that is
-   *      guaranteed to answer 503.
-   *
-   * The request is guarded by the same monotonic counter as the grade and the
-   * heatmap, so an explanation can never outlive the image it describes. Any
-   * failure is confined to its own state: `status`, `response`, `gradCam` and
-   * `gradCamStatus` are never touched here.
-   */
-  const handleGenerateExplanation = useCallback(async () => {
-    const prediction = response?.prediction
-
-    if (status !== 'analyzed' || !prediction) {
-      return
-    }
-
-    if (typeof prediction.predicted_class !== 'number' || typeof prediction.confidence !== 'number') {
-      // Nothing to describe: the endpoint explains numbers, and there are none.
-      setExplainStatus('error')
-      setExplanation(null)
-      return
-    }
-
-    if (availability !== 'ready') {
-      setExplainStatus('unavailable')
-      setExplanation(null)
-      return
-    }
-
-    const generation = requestGeneration.current
-
-    const payload: ExplainApiRequest = {
-      modality: prediction.modality ?? modality,
-      predicted_class: prediction.predicted_class,
-      confidence: prediction.confidence,
-      probabilities: prediction.probabilities ?? {},
-    }
-
-    // Only metadata is sent when a real heatmap exists; the bitmap is left out
-    // so no pixels leave the machine. Same `data_uri` test the card shows, so
-    // what is sent and what is displayed cannot disagree.
-    if (gradCam?.cam?.data_uri) {
-      payload.gradcam = {
-        available: true,
-        target_layer: gradCam.target_layer ?? null,
-        grid_shape: Array.isArray(gradCam.grid_shape) ? gradCam.grid_shape : null,
-        image_size: typeof gradCam.image_size === 'number' ? gradCam.image_size : null,
-        gradients_are_nonzero:
-          typeof gradCam.gradients_are_nonzero === 'boolean'
-            ? gradCam.gradients_are_nonzero
-            : null,
-        is_predicted_class:
-          typeof gradCam.is_predicted_class === 'boolean'
-            ? gradCam.is_predicted_class
-            : null,
-      }
-    } else {
-      payload.gradcam = { available: false }
-    }
-
-    setExplainStatus('loading')
-    setExplanation(null)
-
-    try {
-      const result = await requestExplanation(payload)
-      if (requestGeneration.current !== generation) {
-        return
-      }
-      setExplanation(result.data)
-      setExplainStatus('ready')
-    } catch {
-      if (requestGeneration.current !== generation) {
-        return
-      }
-      // The reason stays in the API client: the screen shows fixed, friendly
-      // copy and keeps the grade that is already final.
-      setExplanation(null)
-      setExplainStatus('error')
-    }
-  }, [response, status, modality, availability, gradCam])
-
   const meta = PAGE_META[activeItem]
 
   return (
@@ -524,11 +390,6 @@ export default function App() {
           status={status}
           response={response}
           onAnalyze={handleAnalyze}
-          gradCamPending={gradCamStatus === 'loading'}
-          availability={availability}
-          explainStatus={explainStatus}
-          explanation={explanation}
-          onGenerateExplanation={handleGenerateExplanation}
           onViewExplainability={() => setActiveItem('explainability')}
         />
       ) : null}

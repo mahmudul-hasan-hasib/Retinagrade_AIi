@@ -3,50 +3,86 @@
 /*
   Design tokens. Tailwind v4 reads @theme at build time and generates the
   matching utilities (bg-brand-600, text-ink-500, ring-surface, ...).
+
+  Dark theme. Both ramps are ordered for a near-black surface, which
+  inverts the usual light-mode reading of the numbers:
+
+    ink-*    50-200 = fills ... 300 = muted text ... 500 = secondary ... 900 = primary
+    brand-*  50 = deepest red tint ... 600 = crimson ... 900 = lightest red
+
+  Nothing in the app may rely on the light-mode assumption that a low number is
+  pale; a new surface colour has to be picked from these steps deliberately.
+
+  Two rules keep copy readable on this canvas:
+
+    - ink-50 to ink-200 are fill steps. They may sit *behind* text, never be the
+      text colour: the readable end of the ramp is the light one, and ink-900
+      (#f8fafc) is the highest-contrast text available. The steps that carry
+      copy are ink-300 (#94a3b8, muted) through ink-900 (primary), with ink-500
+      (#cbd5e1) as the workhorse secondary.
+    - crimson is an accent, not a text colour: selected state, active
+      navigation, the primary action and the predicted grade. Body copy,
+      labels and values stay on the ink ramp.
 */
 @theme {
   --font-sans:
     'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
     'Helvetica Neue', Arial, sans-serif;
 
-  /* Clinical blue accent */
-  --color-brand-50: #eef6ff;
-  --color-brand-100: #d9ebff;
-  --color-brand-200: #bcdcff;
-  --color-brand-300: #8ec7ff;
-  --color-brand-400: #59a9ff;
-  --color-brand-500: #3387fb;
-  --color-brand-600: #1b6ef5;
-  --color-brand-700: #1457e1;
-  --color-brand-800: #1747b6;
-  --color-brand-900: #193f8f;
-  --color-brand-950: #142756;
+  /* Crimson accent: dark tints for fills, light reds for text and glow. */
+  --color-brand-50: #1a0a0c;
+  --color-brand-100: #2c0f12;
+  --color-brand-200: #4c1519;
+  --color-brand-300: #7e1a22;
+  --color-brand-400: #a81b29;
+  --color-brand-500: #e11d48;
+  --color-brand-600: #dc2626;
+  --color-brand-700: #f87171;
+  --color-brand-800: #fca5a5;
+  --color-brand-900: #fee2e2;
+  --color-brand-950: #fff5f5;
 
-  /* Cool neutral ink for body copy */
-  --color-ink-50: #f6f8fb;
-  --color-ink-100: #eef1f6;
-  --color-ink-200: #dde3ec;
-  --color-ink-300: #c3ccdb;
-  --color-ink-400: #93a1b8;
-  --color-ink-500: #6b7a94;
-  --color-ink-600: #505f78;
-  --color-ink-700: #3d4a60;
-  --color-ink-800: #2a3446;
-  --color-ink-900: #1b2333;
+  /* Cool neutral ink, lightest step first for text on dark. The 300-900 span is
+     a slate ramp chosen for contrast on a near-black surface; the first three
+     steps are surfaces only. */
+  --color-ink-50: #0a0e14;
+  --color-ink-100: #131a23;
+  --color-ink-200: #1e2731;
+  --color-ink-300: #94a3b8;
+  --color-ink-400: #a8b6c6;
+  --color-ink-500: #cbd5e1;
+  --color-ink-600: #dde5ee;
+  --color-ink-700: #e9eff6;
+  --color-ink-800: #f1f5f9;
+  --color-ink-900: #f8fafc;
 
-  /* Surface + border */
-  --color-surface: #ffffff;
-  --color-canvas: #f7f9fc;
-  --color-line: #e4e9f1;
+  /* Surface + border. Near-black, faintly translucent so the ambient glow
+     behind the page reads through the cards. */
+  --color-void: #000000;
+  --color-surface: rgb(14 14 17 / 0.78);
+  --color-surface-strong: rgb(18 18 22 / 0.92);
+  --color-canvas: #050507;
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-line-strong: rgb(255 255 255 / 0.14);
 
-  --shadow-card: 0 1px 2px rgb(16 32 64 / 0.04), 0 8px 24px -12px rgb(16 32 64 / 0.12);
-  --shadow-raised: 0 2px 4px rgb(16 32 64 / 0.06), 0 18px 40px -20px rgb(16 32 64 / 0.25);
+  /* Minimal shadows: on a near-black canvas depth comes from the border, not
+     from a drop shadow. */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-raised: 0 2px 8px -4px rgb(0 0 0 / 0.7);
+  /* Reserved for interactive emphasis: active route, selected input, result. */
+  --shadow-glow: 0 0 0 1px rgb(225 29 72 / 0.22), 0 0 26px -12px rgb(225 29 72 / 0.7);
+  --shadow-glow-strong: 0 0 0 1px rgb(225 29 72 / 0.3),
+    0 0 40px -14px rgb(225 29 72 / 0.85);
 }
 
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;
     scroll-behavior: smooth;
+    /* Matches --color-canvas so an overscroll or a slow first paint never
+       flashes a light page behind the app. */
+    background-color: var(--color-canvas);
+    color-scheme: dark;
   }
 
   body {
@@ -57,10 +93,14 @@
     text-rendering: optimizeLegibility;
   }
 
-  /* Visible focus for keyboard users on a light clinical surface. */
+  /* Visible focus for keyboard users on a near-black surface. */
   :focus-visible {
     outline: 2px solid var(--color-brand-600);
     outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: rgb(225 29 72 / 0.35);
   }
 }
 
@@ -69,6 +109,15 @@
   scrollbar-slim {
     scrollbar-width: thin;
     scrollbar-color: var(--color-ink-300) transparent;
+  }
+
+  /* Horizontal rails (the DR grade scale) without a visible scrollbar. */
+  scrollbar-none {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
   }
 }
 
@@ -89,6 +138,11 @@
   }
 }
 
+/*
+  The only motion the product uses: one short fade for the mobile drawer, and
+  the sweep on a loading placeholder. Everything else - hover, focus, active
+  states - is a plain colour transition declared next to the component.
+*/
 @utility animate-fade-in {
   animation: rg-fade-in 0.28s ease-out both;
 }
@@ -109,7 +163,7 @@
     background: linear-gradient(
       90deg,
       transparent,
-      rgb(255 255 255 / 0.75),
+      rgb(255 255 255 / 0.12),
       transparent
     );
     animation: rg-shimmer 1.8s infinite;

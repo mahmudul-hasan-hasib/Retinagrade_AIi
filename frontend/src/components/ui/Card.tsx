@@ -7,12 +7,17 @@ export interface CardProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode
 }
 
+/**
+ * Surfaces are translucent charcoal over the energy field, with a blurred
+ * backdrop: the field stays faintly visible through every card, which is what
+ * makes the glass read as glass rather than as flat grey.
+ */
 const TONE_CLASSES: Record<CardTone, string> = {
   default:
-    'bg-surface ring-1 ring-line shadow-[var(--shadow-card)] rounded-2xl',
-  flat: 'bg-surface ring-1 ring-line rounded-2xl',
+    'bg-surface ring-1 ring-line shadow-[var(--shadow-card)] backdrop-blur-xl rounded-2xl',
+  flat: 'bg-surface ring-1 ring-line backdrop-blur-xl rounded-2xl',
   accent:
-    'bg-surface ring-1 ring-brand-200 shadow-[var(--shadow-card)] rounded-2xl',
+    'bg-surface ring-1 ring-brand-500/25 shadow-[var(--shadow-card)] shadow-[var(--shadow-glow)] backdrop-blur-xl rounded-2xl',
 }
 
 function cx(...parts: Array<string | false | null | undefined>): string {
@@ -56,7 +61,7 @@ export function CardHeader({
     >
       <div className="flex min-w-0 items-start gap-3">
         {icon ? (
-          <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-brand-50 text-brand-700 ring-1 ring-brand-100">
+          <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-brand-500/12 text-brand-700 ring-1 ring-brand-500/25">
             {icon}
           </span>
         ) : null}

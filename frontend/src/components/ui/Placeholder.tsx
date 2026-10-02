@@ -61,8 +61,8 @@ export interface NoticeProps {
 }
 
 const NOTICE_TONES = {
-  info: 'bg-brand-50/70 ring-brand-200 text-brand-900',
-  warning: 'bg-amber-50 ring-amber-200 text-amber-900',
+  info: 'bg-brand-500/10 ring-brand-500/25 text-brand-700',
+  warning: 'bg-amber-500/10 ring-amber-500/25 text-amber-300',
 } as const
 
 /** Informational banner used to state clearly what is not wired up yet. */

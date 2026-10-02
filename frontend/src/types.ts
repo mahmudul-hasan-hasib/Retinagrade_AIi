@@ -5,10 +5,10 @@
  * `backend/inference/predictor.py` (`DR_CLASSES` / `PROBABILITY_KEYS`), so the
  * UI is already aligned with the order the network will emit.
  *
- * Three result surfaces are live, each from its own endpoint: the `/predict`
- * grade and 5-class distribution, the `/gradcam` heatmap, and the `/explain`
- * Gemini prose. Every field is optional, so a partial response renders with a
- * placeholder rather than crashing the page.
+ * Two result surfaces are live, each from its own endpoint: the `/predict`
+ * grade and 5-class distribution, and the `/gradcam` heatmap. Every field is
+ * optional, so a partial response renders with a placeholder rather than
+ * crashing the page.
  */
 
 export type ModalityKey = 'cfp' | 'uwf'
@@ -33,6 +33,11 @@ export interface DrClass {
   key: string
   label: string
   /**
+   * Tightest form, used where all five grades sit side by side and must fit
+   * without wrapping or scrolling on a desktop screen, e.g. the grade scale.
+   */
+  shortLabel: string
+  /**
    * Sentences-case grade name for headline display, e.g.
    * `Moderate Diabetic Retinopathy`. Presentation only: the model still returns
    * the short `label`, and nothing here is ever sent back to the API.
@@ -47,18 +52,6 @@ export interface DrClass {
 }
 
 export type PredictionStatus = 'idle' | 'analyzing' | 'analyzed' | 'error'
-
-/**
- * Lifecycle of `GET /health`, which decides whether Gemini can be offered at
- * all. `unknown` means the check has not answered yet.
- */
-export type GeminiAvailability = 'unknown' | 'ready' | 'unavailable' | 'error'
-
-/**
- * Lifecycle of `POST /explain`. Independent of the prediction: a Gemini failure
- * never invalidates a grade that is already on screen.
- */
-export type ExplainStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
 
 /**
  * A real DR prediction, mirrored from

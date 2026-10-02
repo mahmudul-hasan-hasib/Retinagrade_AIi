@@ -45,6 +45,7 @@ export const DR_CLASSES: readonly DrClass[] = [
     index: 0,
     key: 'No DR',
     label: 'No DR',
+    shortLabel: 'No DR',
     fullLabel: 'No Diabetic Retinopathy',
     description: 'No apparent diabetic retinopathy',
     severity: 'none',
@@ -53,6 +54,7 @@ export const DR_CLASSES: readonly DrClass[] = [
     index: 1,
     key: 'Mild',
     label: 'Mild',
+    shortLabel: 'Mild',
     fullLabel: 'Mild Diabetic Retinopathy',
     description: 'Mild non-proliferative DR',
     severity: 'mild',
@@ -61,6 +63,7 @@ export const DR_CLASSES: readonly DrClass[] = [
     index: 2,
     key: 'Moderate',
     label: 'Moderate',
+    shortLabel: 'Moderate',
     fullLabel: 'Moderate Diabetic Retinopathy',
     description: 'Moderate non-proliferative DR',
     severity: 'moderate',
@@ -69,6 +72,7 @@ export const DR_CLASSES: readonly DrClass[] = [
     index: 3,
     key: 'Severe',
     label: 'Severe',
+    shortLabel: 'Severe',
     fullLabel: 'Severe Diabetic Retinopathy',
     description: 'Severe non-proliferative DR',
     severity: 'severe',
@@ -77,6 +81,7 @@ export const DR_CLASSES: readonly DrClass[] = [
     index: 4,
     key: 'Proliferative DR',
     label: 'Proliferative DR',
+    shortLabel: 'Proliferative',
     fullLabel: 'Proliferative Diabetic Retinopathy',
     description: 'Proliferative diabetic retinopathy',
     severity: 'proliferative',
@@ -118,7 +123,6 @@ export const SEVERITY_STYLES: Record<
 export interface NavItem {
   id: NavItemId
   label: string
-  hint: string
 }
 
 /**
@@ -130,9 +134,9 @@ export interface NavItem {
  * opened that has no content behind it.
  */
 export const NAV_ITEMS: readonly NavItem[] = [
-  { id: 'analyze', label: 'Analyze Image', hint: 'New analysis' },
-  { id: 'explainability', label: 'Explainability', hint: 'Grad-CAM' },
-  { id: 'model', label: 'Model', hint: 'Configuration' },
+  { id: 'analyze', label: 'Analyze Image' },
+  { id: 'explainability', label: 'Explainability' },
+  { id: 'model', label: 'Model' },
 ] as const
 
 /**

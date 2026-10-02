@@ -11,10 +11,11 @@ export interface ModalitySelectorProps {
 }
 
 /**
- * Large CFP / UWF selection cards - never a dropdown.
+ * CFP / UWF as two selectable cards - never a dropdown.
  *
- * The chosen modality decides which model runs, so the two options are given
- * room and are always visible together.
+ * The chosen modality decides which model runs, so both options are always
+ * visible and carry equal weight. Selection is stated three ways - crimson
+ * border, tinted fill, filled check - so it never depends on colour alone.
  *
  * Implemented as an ARIA radiogroup with a roving tab stop: one Tab press moves
  * into the group, arrow keys (and Home / End) move between the two options, and
@@ -65,10 +66,11 @@ export function ModalitySelector({
       <div
         role="radiogroup"
         aria-label="Imaging modality"
-        className="grid gap-3 sm:grid-cols-2"
+        className="grid gap-3.5 sm:grid-cols-2"
       >
         {MODALITIES.map((modality, index) => {
           const isSelected = modality.key === value
+
           return (
             <button
               key={modality.key}
@@ -83,29 +85,34 @@ export function ModalitySelector({
               onClick={() => onChange(modality.key)}
               onKeyDown={(event) => handleKeyDown(event, index)}
               className={[
-                'flex items-center gap-3.5 rounded-[14px] border px-4 py-4 text-left transition-colors',
-                disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+                'flex items-center gap-4 rounded-2xl border px-5 py-5 text-left transition-colors duration-150',
+                disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
                 isSelected
-                  ? 'border-brand-400 bg-brand-50'
-                  : 'border-line bg-surface hover:border-ink-300 hover:bg-ink-50/60',
+                  ? 'border-brand-500/60 bg-brand-500/[0.08]'
+                  : 'border-line bg-white/[0.02] hover:border-white/[0.16] hover:bg-white/[0.04]',
               ].join(' ')}
             >
               <span
                 className={[
-                  'grid size-10 shrink-0 place-items-center rounded-xl transition-colors',
+                  'grid size-11 shrink-0 place-items-center rounded-xl transition-colors duration-150',
                   isSelected
                     ? 'bg-brand-600 text-white'
-                    : 'bg-ink-50 text-ink-500 ring-1 ring-line',
+                    : 'bg-white/[0.05] text-ink-400 ring-1 ring-white/10',
                 ].join(' ')}
               >
                 <RetinaIcon className="size-5" />
               </span>
 
               <span className="min-w-0 flex-1">
-                <span className="block text-[15px] font-semibold text-ink-900">
+                <span
+                  className={[
+                    'block text-[16px] leading-tight font-semibold tracking-tight',
+                    isSelected ? 'text-ink-900' : 'text-ink-800',
+                  ].join(' ')}
+                >
                   {modality.label}
                 </span>
-                <span className="mt-0.5 block text-[13px] leading-relaxed text-ink-500">
+                <span className="mt-1 block text-[13px] leading-relaxed text-ink-500">
                   {modality.fullName}
                 </span>
               </span>
@@ -113,10 +120,10 @@ export function ModalitySelector({
               <span
                 aria-hidden="true"
                 className={[
-                  'grid size-5 shrink-0 place-items-center rounded-full border transition-colors',
+                  'grid size-5 shrink-0 place-items-center rounded-full border transition-colors duration-150',
                   isSelected
                     ? 'border-brand-600 bg-brand-600 text-white'
-                    : 'border-ink-200 bg-surface text-transparent',
+                    : 'border-white/[0.16] text-transparent',
                 ].join(' ')}
               >
                 <CheckIcon className="size-3" />

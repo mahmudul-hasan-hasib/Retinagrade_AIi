@@ -9,12 +9,17 @@ export interface BadgeProps {
   title?: string
 }
 
+/**
+ * Tinted-fill badges: a low-alpha colour over the dark surface for the fill and
+ * ring, the matching light step for the text. Never a pale solid, which would
+ * glare against a near-black page.
+ */
 const TONES: Record<BadgeTone, string> = {
-  neutral: 'bg-ink-100 text-ink-700 ring-ink-200',
-  brand: 'bg-brand-50 text-brand-700 ring-brand-200',
-  success: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  warning: 'bg-amber-50 text-amber-700 ring-amber-200',
-  muted: 'bg-transparent text-ink-400 ring-ink-200',
+  neutral: 'bg-white/[0.06] text-ink-800 ring-white/10',
+  brand: 'bg-brand-500/12 text-brand-700 ring-brand-500/30',
+  success: 'bg-emerald-500/12 text-emerald-300 ring-emerald-500/30',
+  warning: 'bg-amber-500/12 text-amber-300 ring-amber-500/30',
+  muted: 'bg-transparent text-ink-400 ring-white/10',
 }
 
 export function Badge({

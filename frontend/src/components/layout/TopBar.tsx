@@ -1,5 +1,3 @@
-import type { ReactNode } from 'react'
-import { Button } from '../ui/Button'
 import { MenuIcon } from '../icons'
 import { Brand } from './Brand'
 
@@ -7,58 +5,78 @@ export interface TopBarProps {
   /** Empty on screens that render their own page header. */
   title: string
   subtitle?: string
-  badge?: ReactNode
-  onOpenMenu: () => void
+  /** Desktop: expands / collapses the fixed sidebar. */
+  sidebarCollapsed: boolean
+  onToggleSidebar: () => void
+  /** Small screens: opens the overlay drawer. */
+  isDrawerOpen: boolean
+  onOpenDrawer: () => void
 }
 
-export function TopBar({ title, subtitle, badge, onOpenMenu }: TopBarProps) {
+const TOGGLE_CLASSES =
+  'grid size-9 shrink-0 place-items-center rounded-lg text-ink-400 transition-colors duration-150 hover:bg-white/[0.06] hover:text-ink-900'
+
+/**
+ * Slim sticky bar holding the navigation toggle at the very top-left.
+ *
+ * The toggle is the same three-line mark at both breakpoints but does two
+ * different things, so it is rendered as two buttons that occupy the same slot:
+ * below `lg` the sidebar is an overlay and the button opens the drawer, from
+ * `lg` up the sidebar is docked and the button collapses or expands it. Each
+ * button therefore reports the state of the thing it actually controls.
+ *
+ * A screen that draws its own page header passes no title, and the bar then
+ * carries only the toggle (plus the mark on small screens, where the page header
+ * is not in view yet).
+ */
+export function TopBar({
+  title,
+  subtitle,
+  sidebarCollapsed,
+  onToggleSidebar,
+  isDrawerOpen,
+  onOpenDrawer,
+}: TopBarProps) {
   const hasTitle = title.trim().length > 0
 
   return (
-    <header className="sticky top-0 z-30 border-b border-line bg-surface/85 backdrop-blur-md">
-      <div className="flex h-16 items-center gap-3 px-4 sm:px-6">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onOpenMenu}
-          aria-label="Open navigation menu"
-          icon={<MenuIcon />}
-          className="lg:hidden"
-        />
+    <header className="sticky top-0 z-30 border-b border-line bg-canvas/85 backdrop-blur-xl">
+      <div className="flex h-14 items-center gap-3 px-4 sm:px-6">
+        <button
+          type="button"
+          onClick={onToggleSidebar}
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!sidebarCollapsed}
+          className={`${TOGGLE_CLASSES} hidden lg:grid`}
+        >
+          <MenuIcon className="size-5" />
+        </button>
 
-        <div className="lg:hidden">
-          <Brand size="sm" showTagline={false} />
-        </div>
+        <button
+          type="button"
+          onClick={onOpenDrawer}
+          aria-label="Open navigation menu"
+          aria-expanded={isDrawerOpen}
+          className={`${TOGGLE_CLASSES} lg:hidden`}
+        >
+          <MenuIcon className="size-5" />
+        </button>
 
         {hasTitle ? (
-          <div className="hidden min-w-0 flex-1 lg:block">
-            <div className="flex items-center gap-2.5">
-              <h1 className="truncate text-base font-semibold tracking-tight text-ink-900">
-                {title}
-              </h1>
-              {badge}
-            </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-[14px] font-semibold tracking-tight text-ink-900 lg:text-[15px]">
+              {title}
+            </h1>
             {subtitle ? (
-              <p className="truncate text-xs text-ink-500">{subtitle}</p>
+              <p className="truncate text-[12px] text-ink-500">{subtitle}</p>
             ) : null}
           </div>
         ) : (
-          <div className="hidden min-w-0 flex-1 lg:block" />
+          <div className="lg:hidden">
+            <Brand size="sm" />
+          </div>
         )}
-
-        {badge && !hasTitle ? <div className="ml-auto">{badge}</div> : null}
       </div>
-
-      {hasTitle ? (
-        <div className="border-t border-line px-4 py-2 lg:hidden">
-          <h1 className="truncate text-sm font-semibold tracking-tight text-ink-900">
-            {title}
-          </h1>
-          {subtitle ? (
-            <p className="truncate text-[11px] text-ink-500">{subtitle}</p>
-          ) : null}
-        </div>
-      ) : null}
     </header>
   )
 }

@@ -2,11 +2,7 @@ import { useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, KeyboardEvent } from 'react'
 import { ACCEPTED_IMAGE_TYPES } from '../../data/clinical'
 import { AlertIcon, UploadIcon } from '../icons'
-import {
-  ImagePreview,
-  SUPPORTED_FORMAT_LABELS,
-  SUPPORTED_SIZE_LABEL,
-} from './ImagePreview'
+import { ImagePreview } from './ImagePreview'
 
 export interface ImageDropzoneProps {
   file: File | null
@@ -20,13 +16,11 @@ export interface ImageDropzoneProps {
 const ACCEPT_ATTRIBUTE = ACCEPTED_IMAGE_TYPES.join(',')
 
 /**
- * Drag-and-drop / click-to-browse upload area.
+ * One upload card: an empty drop target before a capture exists, and that
+ * capture's preview afterwards, so the page never shows the same image twice.
  *
  * Selection is local: the file is handed to the parent for a preview and only
  * leaves the browser when "Analyze Image" triggers the `/predict` request.
- *
- * Once a capture is chosen this same area becomes its preview, so the page never
- * shows the same image twice.
  */
 export function ImageDropzone({
   file,
@@ -81,7 +75,7 @@ export function ImageDropzone({
 
   if (file && previewUrl) {
     return (
-      <div className="space-y-2">
+      <div>
         <ImagePreview
           previewUrl={previewUrl}
           fileName={file.name}
@@ -95,7 +89,7 @@ export function ImageDropzone({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div
         role="button"
         tabIndex={disabled ? -1 : 0}
@@ -112,43 +106,44 @@ export function ImageDropzone({
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
         className={[
-          'flex flex-col items-center justify-center gap-4 rounded-[14px] border border-dashed px-6 py-14 text-center transition-colors',
-          disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+          'flex flex-col items-center justify-center gap-5 rounded-2xl border border-dashed px-6 py-16 text-center transition-colors duration-150 sm:py-20',
+          disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
           isDragging
-            ? 'border-brand-400 bg-brand-50/60'
-            : 'border-ink-200 bg-ink-50/50 hover:border-brand-300 hover:bg-brand-50/30',
+            ? 'border-brand-500/60 bg-brand-500/[0.08]'
+            : 'border-white/[0.12] bg-white/[0.02] hover:border-brand-500/40 hover:bg-brand-500/[0.03]',
         ].join(' ')}
       >
-        <span className="grid size-12 place-items-center rounded-2xl bg-surface text-brand-600 ring-1 ring-line">
-          <UploadIcon className="size-5.5" />
+        <span className="grid size-14 place-items-center rounded-2xl bg-white/[0.05] text-ink-400 ring-1 ring-white/10">
+          <UploadIcon className="size-6" />
         </span>
 
         <span className="space-y-1.5">
-          <span className="block text-[15px] font-semibold text-ink-900">
+          <span className="block text-[16px] font-semibold tracking-tight text-ink-900">
             Upload retinal image
           </span>
           <span className="block text-[13px] leading-relaxed text-ink-500">
-            Drag and drop your image here or{' '}
-            <span className="font-medium text-brand-700">browse from your computer</span>
+            Drag &amp; drop or{' '}
+            <span className="font-medium text-ink-700">browse</span>
           </span>
-        </span>
-
-        <span className="text-[12px] text-ink-400">
-          {SUPPORTED_FORMAT_LABELS} &middot; {SUPPORTED_SIZE_LABEL}
         </span>
       </div>
 
-      {error ? (
-        <p
-          role="alert"
-          className="flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700 ring-1 ring-red-200"
-        >
-          <AlertIcon className="mt-px size-3.5 shrink-0" />
-          {error}
-        </p>
-      ) : null}
+      {error ? <UploadError message={error} /> : null}
 
       {fileInput}
     </div>
+  )
+}
+
+/** Rejection of a file the browser could not accept, stated once and plainly. */
+function UploadError({ message }: { message: string }) {
+  return (
+    <p
+      role="alert"
+      className="flex items-start gap-2 rounded-xl border border-brand-500/25 bg-brand-500/[0.07] px-3.5 py-2.5 text-[13px] leading-relaxed text-ink-500"
+    >
+      <AlertIcon className="mt-px size-3.5 shrink-0 text-brand-700" />
+      {message}
+    </p>
   )
 }

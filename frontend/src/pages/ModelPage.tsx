@@ -88,7 +88,7 @@ export function ModelPage({ prediction, gradCam }: ModelPageProps) {
             return (
               <div
                 key={modality.key}
-                className="rounded-[14px] border border-line bg-surface p-4 sm:p-5"
+                className="rounded-[14px] border border-line bg-white/[0.03] p-4 sm:p-5"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-[15px] font-semibold text-ink-900">

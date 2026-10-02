@@ -1,21 +1,11 @@
-import { useEffect } from 'react'
-import type { ExplainApiResponse } from '../api/client'
 import { AnalysisResultCard } from '../components/analyze/AnalysisResultCard'
-import { AiExplanationCard } from '../components/analyze/AiExplanationCard'
 import { ImageDropzone } from '../components/analyze/ImageDropzone'
 import { ModalitySelector } from '../components/analyze/ModalitySelector'
-import { AlertIcon, CheckIcon, SparkIcon, UploadIcon } from '../components/icons'
+import { AlertIcon } from '../components/icons'
 import { Button } from '../components/ui/Button'
-import { Card, CardBody, CardHeader } from '../components/ui/Card'
 import { Spinner } from '../components/ui/Feedback'
-import { getDrClass, getModality } from '../data/clinical'
-import type {
-  ExplainStatus,
-  GeminiAvailability,
-  ModalityKey,
-  PredictApiResponse,
-  PredictionStatus,
-} from '../types'
+import { DR_CLASSES, getDrClass, getModality } from '../data/clinical'
+import type { ModalityKey, PredictApiResponse, PredictionStatus } from '../types'
 
 export interface AnalyzePageProps {
   modality: ModalityKey
@@ -27,12 +17,6 @@ export interface AnalyzePageProps {
   status: PredictionStatus
   response: PredictApiResponse | null
   onAnalyze: () => void
-  /** Whether `/gradcam` is still running for this capture. */
-  gradCamPending: boolean
-  availability: GeminiAvailability
-  explainStatus: ExplainStatus
-  explanation: ExplainApiResponse | null
-  onGenerateExplanation: () => void
   /** Opens the Explainability screen. */
   onViewExplainability: () => void
 }
@@ -42,16 +26,18 @@ const ERROR_TITLE = 'Unable to analyze this image.'
 const ERROR_HINT = 'Please check the image and try again.'
 
 /**
- * The whole screening journey on one screen: choose a modality, load a capture,
- * analyse it, read the grade, read a short explanation of it.
+ * The screening journey, in three steps: choose a modality, load a capture,
+ * analyse it.
+ *
+ * That is the whole screen. Everything the run produces arrives below the
+ * button as its own card, so nothing competes with the decision being made
+ * above the fold, and no explanatory, research or debug copy sits on the page
+ * itself. The result card is the last thing on the page: one grade, the scale
+ * it sits on, and the single link to the Grad-CAM view.
  *
  * Nothing here derives a grade, a probability or a sentence. `label` is the
  * server's own predicted class (only the display name is expanded, from
- * `DR_CLASSES`), and the explanation is Gemini's prose from `/explain`.
- *
- * Model internals, probabilities, confidences, raw responses and Grad-CAM are
- * intentionally not rendered here. They remain available on the Explainability
- * and Model screens, and in the API response itself.
+ * `DR_CLASSES`).
  */
 export function AnalyzePage({
   modality,
@@ -63,11 +49,6 @@ export function AnalyzePage({
   status,
   response,
   onAnalyze,
-  gradCamPending,
-  availability,
-  explainStatus,
-  explanation,
-  onGenerateExplanation,
   onViewExplainability,
 }: AnalyzePageProps) {
   const modalityInfo = getModality(modality)
@@ -76,131 +57,105 @@ export function AnalyzePage({
   const isFailed = status === 'error'
 
   const prediction = response?.prediction ?? null
+
+  /**
+   * The predicted class, resolved from the response's own `predicted_class`
+   * index and only falling back to a label lookup if that field is absent. Both
+   * come straight from `/predict`; nothing is re-derived from the probabilities.
+   */
+  const predictedClass =
+    typeof prediction?.predicted_class === 'number'
+      ? (DR_CLASSES.find(
+          (drClass) => drClass.index === prediction.predicted_class,
+        ) ?? null)
+      : prediction?.label
+        ? (getDrClass(prediction.label) ?? null)
+        : null
+
   const gradeTitle = prediction?.label
     ? (getDrClass(prediction.label)?.fullLabel ?? prediction.label)
     : null
 
-  /**
-   * Ask for the explanation as soon as the grade is final.
-   *
-   * Two conditions are waited on, both of them about request quality rather
-   * than availability: the health check must have reported on Gemini, and the
-   * Grad-CAM follow-up must have settled so its metadata can be part of the
-   * explanation request. The grade itself is already on screen throughout.
-   *
-   * The same `onGenerateExplanation` handler as the AI Reports panel is used -
-   * no second Gemini path exists.
-   */
-  useEffect(() => {
-    if (status !== 'analyzed') return
-    if (explainStatus !== 'idle') return
-    if (availability === 'unknown') return
-    if (gradCamPending) return
-    onGenerateExplanation()
-  }, [
-    status,
-    explainStatus,
-    availability,
-    gradCamPending,
-    onGenerateExplanation,
-  ])
-
   return (
-    <div className="mx-auto w-full max-w-[1180px] space-y-8">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-[26px] font-semibold tracking-tight text-balance text-ink-900 sm:text-[28px]">
-            Analyze Retinal Image
-          </h1>
-          <p className="mt-1.5 text-[14px] leading-relaxed text-ink-500">
-            Upload a retinal image to assess diabetic retinopathy severity.
-          </p>
-        </div>
-
-        {availability === 'unavailable' || availability === 'error' ? null : (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-[12px] font-medium text-ink-600 ring-1 ring-line">
-            <CheckIcon className="size-3.5 text-emerald-600" />
-            AI Ready
-          </span>
-        )}
+    <div className="mx-auto w-full max-w-[880px]">
+      <header>
+        <h1 className="text-[28px] leading-[1.15] font-semibold tracking-tight text-balance text-ink-900 sm:text-[34px]">
+          Analyze Retinal Image
+        </h1>
+        <p className="mt-2.5 text-[15px] leading-relaxed text-ink-500">
+          Upload a retinal image to assess diabetic retinopathy.
+        </p>
       </header>
 
-      <Card>
-        <CardHeader
-          title="Analyze Image"
-          subtitle="Select the imaging modality and upload a retinal image."
-        />
+      <div className="mt-9">
+        <ModalitySelector value={modality} onChange={onModalityChange} />
+      </div>
 
-        <CardBody roomy className="space-y-6">
-          <ModalitySelector value={modality} onChange={onModalityChange} />
-
-          <ImageDropzone
-            file={file}
-            previewUrl={previewUrl}
-            modalityLabel={modalityInfo.label}
-            error={uploadError}
-            onSelect={onSelectImage}
-          />
-
-          <Button
-            size="lg"
-            block
-            onClick={onAnalyze}
-            disabled={!hasImage || isAnalyzing}
-            aria-busy={isAnalyzing || undefined}
-            icon={isAnalyzing ? undefined : <SparkIcon />}
-            iconRight={isAnalyzing ? <Spinner tone="light" label="Analyzing" /> : undefined}
-          >
-            {isAnalyzing ? 'Analyzing retinal image...' : 'Analyze Image →'}
-          </Button>
-
-          {isFailed ? (
-            <div
-              role="alert"
-              className="flex flex-col items-start gap-3 rounded-xl bg-red-50 px-4 py-3.5 ring-1 ring-red-200 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="flex items-start gap-2.5">
-                <AlertIcon className="mt-0.5 size-4 shrink-0 text-red-600" />
-                <div>
-                  <p className="text-[14px] font-semibold text-red-800">
-                    {ERROR_TITLE}
-                  </p>
-                  <p className="text-[13px] leading-relaxed text-red-700">
-                    {ERROR_HINT}
-                  </p>
-                </div>
-              </div>
-              <Button variant="secondary" size="sm" onClick={onAnalyze}>
-                Try again
-              </Button>
-            </div>
-          ) : null}
-
-          {!hasImage ? (
-            <p className="flex items-center justify-center gap-1.5 text-[12px] text-ink-400">
-              <UploadIcon className="size-3.5" />
-              Upload an image to enable analysis.
-            </p>
-          ) : null}
-        </CardBody>
-      </Card>
-
-      {status === 'analyzed' ? (
-        <AnalysisResultCard
-          gradeTitle={gradeTitle}
+      <div className="mt-9">
+        <ImageDropzone
+          file={file}
+          previewUrl={previewUrl}
           modalityLabel={modalityInfo.label}
-          fileName={file?.name ?? null}
-          onViewExplainability={onViewExplainability}
+          error={uploadError}
+          onSelect={onSelectImage}
         />
-      ) : null}
+      </div>
 
-      {prediction ? (
-        <AiExplanationCard
-          status={explainStatus}
-          explanation={explanation}
-          canRetry={availability === 'ready' && explainStatus !== 'loading'}
-          onRetry={onGenerateExplanation}
-        />
+      <div className="mt-9">
+        <Button
+          size="xl"
+          block
+          onClick={onAnalyze}
+          disabled={!hasImage || isAnalyzing}
+          aria-busy={isAnalyzing || undefined}
+          iconRight={isAnalyzing ? <Spinner tone="light" label="Analyzing" /> : null}
+        >
+          {isAnalyzing ? (
+            'Analyzing...'
+          ) : (
+            <>
+              Analyze Image <span aria-hidden="true">&rarr;</span>
+            </>
+          )}
+        </Button>
+
+        {isFailed ? (
+          <div
+            role="alert"
+            className="mt-4 flex items-start gap-3 rounded-2xl border border-brand-500/25 bg-brand-500/[0.07] px-4 py-3.5"
+          >
+            <AlertIcon className="mt-0.5 size-4 shrink-0 text-brand-700" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[14px] font-semibold text-ink-900">
+                {ERROR_TITLE}
+              </p>
+              <p className="mt-0.5 text-[13px] leading-relaxed text-ink-500">
+                {ERROR_HINT}
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={onAnalyze}
+              className="self-center"
+            >
+              Retry
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      {/* The result card is the end of the page. */}
+      {status === 'analyzed' ? (
+        <div className="mt-10">
+          <AnalysisResultCard
+            gradeTitle={gradeTitle}
+            predictedClass={predictedClass}
+            modalityLabel={modalityInfo.label}
+            fileName={file?.name ?? null}
+            onViewExplainability={onViewExplainability}
+          />
+        </div>
       ) : null}
     </div>
   )
