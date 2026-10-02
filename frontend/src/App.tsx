@@ -1,6 +1,10 @@
-import { useCallback, useRef, useState } from 'react'
-import { predictImage, requestGradCam } from './api/client'
-import type { GradCamApiResponse } from './api/client'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { fetchHealth, predictImage, requestExplanation, requestGradCam } from './api/client'
+import type {
+  ExplainApiRequest,
+  ExplainApiResponse,
+  GradCamApiResponse,
+} from './api/client'
 import { LayersIcon } from './components/icons'
 import { AppShell } from './components/layout/AppShell'
 import { Badge } from './components/ui/Badge'
@@ -10,7 +14,6 @@ import { useImageSelection } from './hooks/useImageSelection'
 import { formatPercent, NO_VALUE } from './lib/format'
 import { AnalyzePage } from './pages/AnalyzePage'
 import { DashboardPage } from './pages/DashboardPage'
-import { ExplainabilityPage } from './pages/ExplainabilityPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { UnavailablePage } from './pages/UnavailablePage'
 import type {
@@ -35,7 +38,7 @@ const PAGE_META: Record<NavItemId, { title: string; subtitle: string }> = {
   },
   explainability: {
     title: 'Explainability',
-    subtitle: 'Grad-CAM overlays and saliency evidence',
+    subtitle: 'Grad-CAM activation map for the predicted grade',
   },
   reports: {
     title: 'AI Reports',
@@ -49,6 +52,12 @@ const PAGE_META: Record<NavItemId, { title: string; subtitle: string }> = {
 
 /** Lifecycle of the follow-up Grad-CAM call, which is independent of /predict. */
 type GradCamLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
+
+/** Lifecycle of `GET /health`, which decides whether Gemini can be offered. */
+type GeminiAvailability = 'unknown' | 'ready' | 'unavailable' | 'error'
+
+/** Lifecycle of `POST /explain`, which runs no model of ours. */
+type ExplainStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
 
 interface GradCamCardProps {
   gradCam: GradCamApiResponse | null
@@ -227,6 +236,11 @@ export default function App() {
   const [gradCam, setGradCam] = useState<GradCamApiResponse | null>(null)
   const [gradCamStatus, setGradCamStatus] = useState<GradCamLoadStatus>('idle')
   const [gradCamError, setGradCamError] = useState<string | null>(null)
+  const [availability, setAvailability] = useState<GeminiAvailability>('unknown')
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null)
+  const [explainStatus, setExplainStatus] = useState<ExplainStatus>('idle')
+  const [explanation, setExplanation] = useState<ExplainApiResponse | null>(null)
+  const [explainError, setExplainError] = useState<string | null>(null)
   const image = useImageSelection()
 
   /**
@@ -251,6 +265,44 @@ export default function App() {
     setGradCam(null)
     setGradCamStatus('idle')
     setGradCamError(null)
+    setExplainStatus('idle')
+    setExplanation(null)
+    setExplainError(null)
+  }, [])
+
+  /**
+   * Read `gemini_configured` from `GET /health` once on load.
+   *
+   * The flag is a server-side fact that does not change while the page is open,
+   * so it is fetched once rather than per request. It runs no model and never
+   * touches the prediction state. A failure here only means the explanation
+   * action stays disabled - it is recorded, not thrown, so the analyze workflow
+   * is unaffected.
+   */
+  useEffect(() => {
+    let active = true
+
+    fetchHealth()
+      .then((result) => {
+        if (!active) {
+          return
+        }
+        setAvailability(result.data.gemini_configured === true ? 'ready' : 'unavailable')
+      })
+      .catch((error: unknown) => {
+        if (!active) {
+          return
+        }
+        const failed = error as { message?: string }
+        setAvailability('error')
+        setAvailabilityError(
+          failed.message ?? 'The health check request to the backend failed.',
+        )
+      })
+
+    return () => {
+      active = false
+    }
   }, [])
 
   const handleModalityChange = useCallback(
@@ -339,7 +391,112 @@ export default function App() {
     }
   }, [image.file, modality])
 
+  /**
+   * Ask Gemini to explain the prediction that is already on screen.
+   *
+   * Only the numbers `/predict` returned are sent - modality, predicted class,
+   * confidence and the full 5-class distribution - plus Grad-CAM *metadata*
+   * from `/gradcam` when a heatmap exists. The heatmap bitmap is deliberately
+   * not included, and no image is re-uploaded: `/explain` runs no model of ours
+   * and only describes what it is given.
+   *
+   * Two guards, in order:
+   *   1. there must be a graded prediction with a class and a confidence to
+   *      describe - the endpoint explains numbers, so it cannot run before that;
+   *   2. `GET /health` must have reported `gemini_configured: true`. Anything
+   *      else - false, absent or unreadable - is treated as "not known to be
+   *      configured" and never as permission, so a server with no key is
+   *      reported as unavailable instead of being sent a request that is
+   *      guaranteed to answer 503.
+   *
+   * The request is guarded by the same monotonic counter as the grade and the
+   * heatmap, so an explanation can never outlive the image it describes. Any
+   * failure is confined to its own state: `status`, `response`, `gradCam` and
+   * `gradCamStatus` are never touched here.
+   */
+  const handleGenerateExplanation = useCallback(async () => {
+    const prediction = response?.prediction
+
+    if (status !== 'analyzed' || !prediction) {
+      return
+    }
+
+    if (typeof prediction.predicted_class !== 'number' || typeof prediction.confidence !== 'number') {
+      setExplainStatus('error')
+      setExplanation(null)
+      setExplainError(
+        'The prediction result is missing its class or confidence, so there is nothing to explain.',
+      )
+      return
+    }
+
+    if (availability !== 'ready') {
+      setExplainStatus('unavailable')
+      setExplanation(null)
+      setExplainError(null)
+      return
+    }
+
+    const generation = requestGeneration.current
+
+    const payload: ExplainApiRequest = {
+      modality: prediction.modality ?? modality,
+      predicted_class: prediction.predicted_class,
+      confidence: prediction.confidence,
+      probabilities: prediction.probabilities ?? {},
+    }
+
+    // Only metadata is sent when a real heatmap exists; the bitmap is left out
+    // so no pixels leave the machine. Same `data_uri` test the card shows, so
+    // what is sent and what is displayed cannot disagree.
+    if (gradCam?.cam?.data_uri) {
+      payload.gradcam = {
+        available: true,
+        target_layer: gradCam.target_layer ?? null,
+        grid_shape: Array.isArray(gradCam.grid_shape) ? gradCam.grid_shape : null,
+        image_size: typeof gradCam.image_size === 'number' ? gradCam.image_size : null,
+        gradients_are_nonzero:
+          typeof gradCam.gradients_are_nonzero === 'boolean'
+            ? gradCam.gradients_are_nonzero
+            : null,
+        is_predicted_class:
+          typeof gradCam.is_predicted_class === 'boolean'
+            ? gradCam.is_predicted_class
+            : null,
+      }
+    } else {
+      payload.gradcam = { available: false }
+    }
+
+    setExplainStatus('loading')
+    setExplainError(null)
+
+    try {
+      const result = await requestExplanation(payload)
+      if (requestGeneration.current !== generation) {
+        return
+      }
+      setExplanation(result.data)
+      setExplainStatus('ready')
+    } catch (error) {
+      if (requestGeneration.current !== generation) {
+        return
+      }
+      const failed = error as { httpStatus?: number; message?: string }
+      setExplanation(null)
+      setExplainError(failed.message ?? 'The request to /explain failed.')
+      setExplainStatus('error')
+    }
+  }, [response, status, modality, availability, gradCam])
+
   const meta = PAGE_META[activeItem]
+
+  /**
+   * Whether a real heatmap exists for the current capture. Derived from the
+   * response rather than the status alone, so a "ready" state with no image can
+   * never be reported to `/explain` as available Grad-CAM evidence.
+   */
+  const gradCamReady = gradCamStatus === 'ready' && Boolean(gradCam?.cam?.data_uri)
 
   return (
     <AppShell
@@ -363,11 +520,18 @@ export default function App() {
             httpStatus={httpStatus}
             requestError={requestError}
             onAnalyze={handleAnalyze}
+            gradCamAvailable={gradCamReady}
+            gradCamPending={gradCamStatus === 'loading'}
+            availability={availability}
+            availabilityError={availabilityError}
+            explainStatus={explainStatus}
+            explanation={explanation}
+            explainError={explainError}
+            onGenerateExplanation={handleGenerateExplanation}
           />
 
-          {/* Real heatmap, rendered in the result area directly below the
-              analyze workflow. The placeholder XAI panel above keeps its own
-              place in the layout. */}
+          {/* The single real Grad-CAM surface, drawn directly below the analyze
+              workflow. It is the only explainability panel in the app. */}
           <GradCamCard
             gradCam={gradCam}
             status={gradCamStatus}
@@ -379,20 +543,11 @@ export default function App() {
       {activeItem === 'dashboard' ? <DashboardPage /> : null}
 
       {activeItem === 'explainability' ? (
-        <>
-          <ExplainabilityPage
-            previewUrl={image.previewUrl}
-            fileName={image.file?.name ?? null}
-            modality={modality}
-            status={status}
-          />
-
-          <GradCamCard
-            gradCam={gradCam}
-            status={gradCamStatus}
-            error={gradCamError}
-          />
-        </>
+        <GradCamCard
+          gradCam={gradCam}
+          status={gradCamStatus}
+          error={gradCamError}
+        />
       ) : null}
 
       {activeItem === 'reports' ? (
@@ -400,6 +555,15 @@ export default function App() {
           fileName={image.file?.name ?? null}
           modality={modality}
           status={status}
+          prediction={response?.prediction ?? null}
+          gradCamAvailable={gradCamReady}
+          gradCamPending={gradCamStatus === 'loading'}
+          availability={availability}
+          availabilityError={availabilityError}
+          explainStatus={explainStatus}
+          explanation={explanation}
+          explainError={explainError}
+          onGenerateExplanation={handleGenerateExplanation}
         />
       ) : null}
 

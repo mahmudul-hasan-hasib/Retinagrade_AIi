@@ -5,9 +5,10 @@
  * `backend/inference/predictor.py` (`DR_CLASSES` / `PROBABILITY_KEYS`), so the
  * UI is already aligned with the order the network will emit.
  *
- * NOTE: Grad-CAM and AI report values do not exist yet. The analyze page renders
- * the live `/predict` prediction (grade, confidence, 5-class probabilities);
- * every other result surface is still a placeholder.
+ * Three result surfaces are live, each from its own endpoint: the `/predict`
+ * grade and 5-class distribution, the `/gradcam` heatmap, and the `/explain`
+ * Gemini prose. Every field is optional, so a partial response renders with a
+ * placeholder rather than crashing the page.
  */
 
 export type ModalityKey = 'cfp' | 'uwf'
@@ -82,8 +83,11 @@ export interface PredictApiResponse {
 }
 
 /**
- * A single analysis row. `label` / `confidence` / `probabilities` are
- * `null` until real inference is wired up - they are never faked.
+ * A single analysis row.
+ *
+ * Reserved for the screening-history surface, which is not built yet - see
+ * `NAV_ITEMS` in `data/clinical.ts`. The fields are `null` until results are
+ * actually persisted; they are never faked.
  */
 export interface AnalysisRecord {
   id: string

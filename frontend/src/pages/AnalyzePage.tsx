@@ -2,10 +2,10 @@ import { ImageDropzone } from '../components/analyze/ImageDropzone'
 import { ImagePreview } from '../components/analyze/ImagePreview'
 import { ModalitySelector } from '../components/analyze/ModalitySelector'
 import { AiReportCard } from '../components/reports/AiReportCard'
+import type { ExplainStatus, GeminiAvailability } from '../components/reports/AiReportCard'
 import { ApiResponseCard } from '../components/results/ApiResponseCard'
 import { PredictionCard } from '../components/results/PredictionCard'
 import { ProbabilityCard } from '../components/results/ProbabilityCard'
-import { XaiPanel } from '../components/xai/XaiPanel'
 import { AlertIcon, SparkIcon } from '../components/icons'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -18,6 +18,7 @@ import type {
   PredictApiResponse,
   PredictionStatus,
 } from '../types'
+import type { ExplainApiResponse } from '../api/client'
 
 export interface AnalyzePageProps {
   modality: ModalityKey
@@ -33,6 +34,14 @@ export interface AnalyzePageProps {
   httpStatus: number | null
   requestError: string | null
   onAnalyze: () => void
+  gradCamAvailable: boolean
+  gradCamPending: boolean
+  availability: GeminiAvailability
+  availabilityError: string | null
+  explainStatus: ExplainStatus
+  explanation: ExplainApiResponse | null
+  explainError: string | null
+  onGenerateExplanation: () => void
 }
 
 /**
@@ -40,8 +49,11 @@ export interface AnalyzePageProps {
  *
  * "Analyze Image" POSTs the capture plus the modality to `/predict` and the
  * response is shown verbatim in the Backend Response card. No grade, confidence
- * or probability is computed on this page - the clinical panels stay
- * placeholders until the backend can actually run a model.
+ * or probability is computed on this page - the panels below project fields the
+ * server sent and keep a placeholder when the server sent none.
+ *
+ * Grad-CAM is not rendered here: `App` draws the single real `GradCamCard`
+ * directly beneath this page, so the heatmap has exactly one home.
  */
 export function AnalyzePage({
   modality,
@@ -56,6 +68,14 @@ export function AnalyzePage({
   httpStatus,
   requestError,
   onAnalyze,
+  gradCamAvailable,
+  gradCamPending,
+  availability,
+  availabilityError,
+  explainStatus,
+  explanation,
+  explainError,
+  onGenerateExplanation,
 }: AnalyzePageProps) {
   const modalityInfo = getModality(modality)
   const hasImage = Boolean(file)
@@ -89,7 +109,8 @@ export function AnalyzePage({
       >
         "Analyze Image" uploads the capture to POST /predict and the returned DR
         grade, confidence and per-class probabilities are shown below, as is the
-        raw response. Grad-CAM maps and the AI report are still placeholders.
+        raw response. The Grad-CAM heatmap and the Gemini explanation are separate
+        follow-up requests, each independent of the prediction.
       </Notice>
 
       <div className="grid gap-5 xl:grid-cols-2 xl:items-start">
@@ -216,19 +237,20 @@ export function AnalyzePage({
         )}
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-2 xl:items-start">
-        <XaiPanel
-          previewUrl={previewUrl}
-          fileName={file?.name ?? null}
-          modality={modality}
-          status={status}
-        />
-        <AiReportCard
-          fileName={file?.name ?? null}
-          modality={modality}
-          status={status}
-        />
-      </div>
+      <AiReportCard
+        fileName={file?.name ?? null}
+        modality={modality}
+        status={status}
+        prediction={prediction}
+        gradCamAvailable={gradCamAvailable}
+        gradCamPending={gradCamPending}
+        availability={availability}
+        availabilityError={availabilityError}
+        explainStatus={explainStatus}
+        explanation={explanation}
+        explainError={explainError}
+        onGenerate={onGenerateExplanation}
+      />
     </>
   )
 }
