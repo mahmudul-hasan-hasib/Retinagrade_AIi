@@ -12,7 +12,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "check": "npm run typecheck && npm run lint"
   },
   "dependencies": {
     "react": "^19.3.0",
