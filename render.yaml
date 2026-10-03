@@ -60,23 +60,9 @@ services:
     plan: standard
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    # No --reload: production. $PORT is supplied by Render.
-    # --workers 1 is explicit on purpose. Every worker process loads its own copy
-    # of the checkpoints it is asked for (~250 MB resident for both), so a second
-    # worker is an out-of-memory kill on Render, not a speed-up. Inference is
-    # serialised per modality inside the app anyway.
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
-    # Python 3.10.11 is pinned by backend/.python-version, which Render reads
-    # from rootDir. backend/runtime.txt states the same version for tools that
-    # prefer it. There is deliberately no PYTHON_VERSION variable here: two
-    # sources of truth for the interpreter is how a deploy ends up on a
-    # different patch than the one the wheels were validated against.
     envVars:
-      # Comma-separated list of extra browser origins. Leave unset locally:
-      # the backend then allows localhost origins only. On Render this MUST be
-      # the static site's public URL, or every /predict and /gradcam call from
-      # the deployed page is blocked by the browser.
       - key: CORS_ORIGINS
         sync: false
 
@@ -90,16 +76,5 @@ services:
     buildCommand: npm install && npm run build
     staticPublishPath: ./dist
     envVars:
-      - key: VITE_API_URL
-        sync: false
-    # Node version comes from `engines` in frontend/package.json
-    # (^20.19.0 || >=22.12.0, which Vite 8 requires). Do not pin NODE_VERSION
-    # here as well: two sources of truth for the toolchain is how builds start
-    # failing after a dependency bump.
-    envVars:
-      # Inlined into the bundle at build time. Set to the backend's public URL.
-      # MUST be filled in: left empty, `data/clinical.ts` falls back to
-      # http://localhost:8000 and the deployed page silently calls the
-      # visitor's own machine instead of the API.
       - key: VITE_API_URL
         sync: false
