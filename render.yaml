@@ -1,23 +1,7 @@
-# RetinaGrade AI - Render Blueprint (both services on the Free Tier)
-#
-# Schema notes (verified against Render's Blueprint spec):
-#   * Static sites are declared as `type: web` + `runtime: static`, NOT
-#     `type: static` (which Render rejects with: unknown type "static").
-#   * `plan` is a property of *instance-backed* web services only. A static
-#     site has no instance and is free by definition, so `plan` is omitted
-#     from retinagrade-web on purpose - declaring it triggers a schema warning.
-#   * Each service has exactly ONE `envVars:` key. YAML forbids duplicate
-#     mapping keys, so a second `envVars:` block in the same service is a hard
-#     parse error. Append new variables to the existing list instead.
-#
-# Deploy order (see README/notes): the API is created first and the static
-# site builds without VITE_API_URL - it falls back to http://localhost:8000 -
-# so a missing URL can never fail the frontend build.
-
 services:
-  # ---------------------------------------------------------------------------
-  # Backend: FastAPI, CPU-only EfficientNet-B0 inference (CFP + UWF)
-  # ---------------------------------------------------------------------------
+  # -------------------------------------------------------------------------
+  # Backend: FastAPI, CPU-only inference (Free tier)
+  # -------------------------------------------------------------------------
   - type: web
     name: retinagrade-api
     runtime: python
@@ -27,38 +11,18 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
     envVars:
-      # Required at deploy time. Paste the static site's exact origin, e.g.
-      #   https://retinagrade-web.onrender.com
-      # Render shows this prompt on Blueprint creation because sync: false.
-      # Deterministic alternative - the service name is fixed above, so the URL
-      # is known in advance and the value can be inlined instead:
-      #   - key: CORS_ORIGINS
-      #     value: https://retinagrade-web.onrender.com
       - key: CORS_ORIGINS
         sync: false
 
-  # ---------------------------------------------------------------------------
-  # Frontend: React + TypeScript + Vite, served as static files
-  # ---------------------------------------------------------------------------
+  # -------------------------------------------------------------------------
+  # Frontend: Vite build, served as static files (Free tier)
+  # -------------------------------------------------------------------------
   - type: web
     name: retinagrade-web
     runtime: static
     rootDir: frontend
-    # npm ci (not npm install) installs the exact tree in the committed
-    # package-lock.json, so a new upstream minor version can never break the
-    # deploy build. `npm run build` is `vite build` only - type checking is NOT
-    # part of the build, so a TS diagnostic can never abort a deployment.
-    buildCommand: npm ci && npm run build
+    buildCommand: npm install && npm run build
     staticPublishPath: ./dist
-    pullRequestPreviewsEnabled: false
     envVars:
-      # Vite 8 requires Node ^20.19.0 || >=22.12.0. Render's default Node can
-      # be older than that, which fails the build with
-      # "Vite requires Node.js version 20.19+ or 22.12+" - pin it explicitly.
-      - key: NODE_VERSION
-        value: "22.14.0"
-      # Inlined into the bundle at BUILD time by Vite, so changing it later
-      # requires a rebuild (Render rebuilds this static site on env change).
-      # Paste the API's URL, e.g. https://retinagrade-api.onrender.com
       - key: VITE_API_URL
         sync: false
