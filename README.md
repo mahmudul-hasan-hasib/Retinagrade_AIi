@@ -90,25 +90,6 @@ separately and are loaded separately, each with `load_state_dict(strict=True)`.
   be on the CPU after load, and the requirements pin the `+cpu` wheel index. `cuda_available`
   is reported by `/health` for transparency only.
 
-### Reference run
-
-Reproduced by `backend/test_prediction.py` against the two tracked sample captures. These
-images are unlabelled, so this is a smoke test of the pipeline, not an accuracy result.
-
-| | CFP | UWF |
-|---|---|---|
-| Result | Moderate (class 2) | Mild (class 1) |
-| Confidence | 0.703081 | 0.881828 |
-| Input size | 224 px (assumed) | 512 px (from checkpoint) |
-| Gradient sum | 0.999999 | 0.999999 |
-| Contract checks | all passed | all passed |
-
-> The two sample images are *different* photographs, not the same eye in two modalities.
-> The Moderate/Mild difference is therefore not a cross-modality disagreement, and `n = 1`
-> per modality supports no accuracy claim.
-
----
-
 ## Architecture and Tech Stack
 
 ```
