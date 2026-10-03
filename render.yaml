@@ -1,58 +1,6 @@
-# RetinaGrade AI - Render blueprint.
-#
-# Two services from one repository:
-#   retinagrade-api   Python web service  (rootDir: backend)
-#   retinagrade-web   Static site         (rootDir: frontend)
-#
-# Deploy: push this repository to GitHub, then in Render choose
-# "New > Blueprint" and point it at the repository. Render reads this file and
-# creates both services.
-#
-# ---------------------------------------------------------------------------
-# BEFORE THE FIRST DEPLOY, FILL IN THESE TWO ENVIRONMENT VARIABLES
-# ---------------------------------------------------------------------------
-# Both are declared with `sync: false`, so Render prompts for them and stores
-# them as environment variables. Neither is a secret and neither has a value
-# here; the backend URL cannot be known until Render has created the services.
-#
-#   On retinagrade-api:  CORS_ORIGINS=https://<the frontend's public URL>
-#   On retinagrade-web:  VITE_API_URL=https://<the backend's public URL>
-#
-# CORS_ORIGINS is required because the browser enforces CORS: the static site
-# and the API are different origins, so without this the deployed frontend
-# cannot call /predict or /gradcam. Unset, the backend allows localhost only.
-#
-# VITE_API_URL is inlined into the bundle at BUILD time by Vite. Changing it
-# requires a new frontend build (Render rebuilds the static site when you save
-# an environment variable).
-#
-# ---------------------------------------------------------------------------
-# PLAN / PERFORMANCE
-# ---------------------------------------------------------------------------
-# The API is a paid instance on purpose. /predict and /gradcam run real
-# EfficientNet-B0 forward (and, for Grad-CAM, backward) passes on the CPU, and
-# the checkpoint is loaded lazily into the worker on first use:
-#
-#   * `free` (0.1 CPU, 512 MB) cannot do this. Measured on the development
-#     machine: /predict ~6-7 s, CFP Grad-CAM ~1 s, UWF Grad-CAM ~22 s, plus
-#     ~250 MB resident for torch plus the loaded checkpoints. On 0.1 CPU those
-#     numbers are an order of magnitude worse and 512 MB is an out-of-memory
-#     kill, so /predict and /gradcam would fail while /health kept answering.
-#   * `starter` (0.5 CPU, 512 MB) is cheaper but still shares the same 512 MB
-#     ceiling, which torch alone nearly fills.
-#   * `standard` (1 CPU, 2 GB) is what the memory and latency budget above
-#     actually needs.
-#
-# This is a real cost. To drop to `starter`, edit `plan` below (or change it in
-# the Render dashboard, no rebuild needed) and accept the OOM risk.
-#
-# UWF Grad-CAM is still the slowest request at ~22 s of CPU work. That is
-# inherent to Grad-CAM at 512x512 on a CPU and is not configurable away.
-# ---------------------------------------------------------------------------
-
 services:
   # -------------------------------------------------------------------------
-  # Backend: FastAPI, CPU-only inference
+  # Backend: FastAPI, CPU-only inference (Free tier)
   # -------------------------------------------------------------------------
   - type: web
     name: retinagrade-api
@@ -67,7 +15,7 @@ services:
         sync: false
 
   # -------------------------------------------------------------------------
-  # Frontend: Vite build, served as static files
+  # Frontend: Vite build, served as static files (Free tier)
   # -------------------------------------------------------------------------
   - type: web
     name: retinagrade-web
