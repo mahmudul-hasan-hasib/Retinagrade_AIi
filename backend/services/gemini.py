@@ -22,6 +22,7 @@ import time - the prediction endpoints must keep working without Gemini.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 import os
@@ -56,6 +57,11 @@ DISCLAIMER = (
 #: Appended to the response regardless of what the model returned, so the
 #: disclaimer cannot be lost to truncation or a refusal.
 API_NOT_CONFIGURED_CODE = "gemini_not_configured"
+
+#: Cache for the ``google.genai`` import probe. ``None`` means "not probed yet";
+#: the result is memoised by :func:`_sdk_available` because it cannot change
+#: while the process is running.
+_SDK_AVAILABLE: Optional[bool] = None
 
 
 class ExplanationError(Exception):
@@ -184,9 +190,40 @@ def load_settings(require_key: bool = True) -> Optional[GeminiSettings]:
     )
 
 
+def _sdk_available() -> bool:
+    """True when the optional ``google-genai`` SDK is importable on this server.
+
+    The SDK is an *optional* dependency: it is deliberately absent from
+    ``requirements.txt`` for the CPU-only deployment, where ``/predict``,
+    ``/gradcam`` and ``/health`` are the whole product. The probe result is
+    cached because ``/health`` calls this on every request and an installed SDK
+    never disappears at runtime.
+
+    ``find_spec`` is used rather than a real import so the check stays cheap
+    and cannot execute SDK module-level code. It can raise if a parent package
+    is missing, which is exactly the "not installed" case, so the exception is
+    folded into ``False`` rather than allowed to escape ``/health``.
+    """
+    global _SDK_AVAILABLE
+    if _SDK_AVAILABLE is None:
+        try:
+            _SDK_AVAILABLE = importlib.util.find_spec("google.genai") is not None
+        except (ImportError, ValueError):
+            _SDK_AVAILABLE = False
+    return _SDK_AVAILABLE
+
+
 def is_available() -> bool:
-    """True when a key is configured. Never raises, never touches the network."""
-    return bool((os.environ.get("GEMINI_API_KEY") or "").strip())
+    """True when ``POST /explain`` could actually run here.
+
+    Two conditions, both required: a configured key **and** the installed SDK.
+    Reporting on the key alone would make ``/health`` answer
+    ``gemini_configured: true`` on a deployment where ``google-genai`` is not
+    installed and every ``/explain`` request would fail with 503 - a capability
+    flag that lies is worse than one that says no. Never raises, never touches
+    the network.
+    """
+    return bool((os.environ.get("GEMINI_API_KEY") or "").strip()) and _sdk_available()
 
 
 def _format_probability_table(probabilities: Mapping[str, float], order: list) -> str:

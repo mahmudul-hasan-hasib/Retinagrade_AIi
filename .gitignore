@@ -21,15 +21,26 @@ __pycache__/
 # --- Node / Vite ---
 node_modules/
 dist/
+frontend/dist/
 coverage/
 npm-debug.log*
+*.log
 
-# --- Model weights (large binaries) ---
-*.pt
-*.pth
+# --- Model weights ---
+# The two production checkpoints are TRACKED on purpose: `inference/model_loader.py`
+# loads them at request time, so a fresh clone has to contain them or /predict and
+# /gradcam answer 503. Both are far below GitHub's 100 MB per-file limit
+# (~16 MB CFP, ~48 MB UWF).
+#
+# Everything else that lands in backend/models/ stays ignored. Note that git
+# cannot re-include a file whose parent *directory* is excluded, so the pattern
+# below excludes the directory's contents (`backend/models/*`) rather than the
+# directory itself, which keeps the two negations effective.
 *.onnx
 backend/models/*
 !backend/models/.gitkeep
+!backend/models/EfficientNetB0_CFP_final.pth
+!backend/models/EfficientNetB0_UWF_final.pt
 
 # --- Flutter (frontend project not created yet) ---
 frontend/.dart_tool/

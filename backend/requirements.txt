@@ -1,35 +1,53 @@
-# RetinaGrade AI - backend requirements (CPU only, no CUDA)
-# Target: Python 3.10 / Windows. GPU packages are intentionally not used.
+# RetinaGrade AI - backend runtime requirements (CPU only, no CUDA).
 #
-# Install (from the backend/ directory):
-#   .venv\Scripts\python.exe -m pip install -r requirements.txt
+# Exactly what `uvicorn main:app` imports at runtime. Nothing else:
+# no test tooling, no training dependencies, no Jupyter, no unused ML libraries.
 #
-# The extra index below serves the official CPU-only PyTorch wheels so that
-# the +cpu builds are resolved instead of the CUDA-enabled default wheels.
+# Install (from backend/):
+#   python -m pip install -r requirements.txt
+#
+# The extra index below serves the official CPU-only PyTorch wheels so the
+# `+cpu` builds are resolved instead of the CUDA-enabled default wheels from
+# PyPI. This project never selects a CUDA device: model loading pins
+# map_location="cpu" and asserts every parameter and buffer is on the CPU.
 
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # --- ML / inference (CPU-only builds) ---
+# torch / torchvision: model architecture, checkpoint loading, Grad-CAM.
 torch==2.14.0+cpu
 torchvision==0.29.0+cpu
 
 # --- Web layer ---
+# fastapi: app + routing; starlette (its dependency) supplies run_in_threadpool
+# and CORSMiddleware. pydantic: imported directly for the request/response models.
 fastapi==0.141.1
+starlette==1.7.0
+pydantic==2.13.5
+# uvicorn: the ASGI server used by the production start command.
 uvicorn[standard]==0.54.0
+# python-multipart: required by FastAPI for the multipart/form-data upload
+# fields on POST /predict and POST /gradcam (image file + modality form field).
 python-multipart==0.0.32
+# python-dotenv: main.py calls load_dotenv() for the optional local backend/.env.
 python-dotenv==1.2.3
 
-# --- AI-assisted explanation (POST /explain) ---
-# Official Google Gemini SDK. Optional at runtime: if it is missing, or if
-# GEMINI_API_KEY is empty, /explain answers 503 gemini_not_configured and the
-# prediction endpoints (/predict, /gradcam) are unaffected.
-google-genai==2.28.0
-
 # --- Imaging / preprocessing ---
+# numpy: tensor maths, probability lists, Grad-CAM PNG colour ramp.
+# pillow: image decoding/encoding, torchvision.transforms.functional backend.
 numpy==2.2.6
 pillow==12.3.0
-opencv-python==5.0.0.93
 
-# --- Added later (not installed) ---
-# reportlab             # PDF report export
-# pytest, httpx         # test suite
+# Deliberately NOT listed:
+#   opencv-python  - not imported anywhere in the backend.
+#   google-genai   - optional POST /explain only; imported lazily inside
+#                    services/gemini.py. Without it /explain answers
+#                    503 gemini_not_configured, and /health reports
+#                    gemini_configured: false even when GEMINI_API_KEY is set,
+#                    so /predict, /gradcam and /health are unaffected.
+#                    To enable /explain, add google-genai==2.28.0 here (the
+#                    version this project is validated against).
+#   timm           - only used by the offline inference/verify_architecture.py
+#                    CLI script, never by the API.
+#   pytest, httpx - development / test tooling only.
+#   reportlab      - not implemented.

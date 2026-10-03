@@ -2,7 +2,34 @@ import type { DrClass, Modality, ModalityKey, NavItemId } from '../types'
 
 export const APP_NAME = 'RetinaGrade AI'
 export const APP_TAGLINE = 'Diabetic Retinopathy Screening'
-export const BACKEND_BASE_URL = 'http://127.0.0.1:8000'
+/**
+ * Base URL of the RetinaGrade AI backend.
+ *
+ * Read from `VITE_API_URL` at build time so the same source tree can be built
+ * against a local API or a deployed one:
+ *
+ *   development  VITE_API_URL unset or blank -> http://localhost:8000
+ *               (copy `frontend/.env.example` to `frontend/.env` to set it)
+ *   production   VITE_API_URL=https://<backend-host>  -> that host
+ *
+ * Blank counts as unset on purpose. A deployment platform that declares
+ * `VITE_API_URL` as a value-to-fill (Render does, with `sync: false`) will hand
+ * the build an empty string if the operator skips it, and an empty string is not
+ * nullish: `??` would keep it, every endpoint would collapse to a same-origin
+ * path like `/predict`, and the deployed page would quietly call itself instead
+ * of the API. Falling back to localhost is the same class of silent failure, so
+ * the value is validated once, here, rather than being trusted.
+ *
+ * Vite inlines `import.meta.env.VITE_*` into the bundle, so this must stay a
+ * plain property access on `import.meta.env` - no dynamic lookup. Surrounding
+ * whitespace and trailing slashes are stripped so
+ * `${BACKEND_BASE_URL}/predict` never doubles up or points at nothing.
+ */
+const configuredApiUrl = (import.meta.env.VITE_API_URL ?? '').trim()
+
+export const BACKEND_BASE_URL = (
+  configuredApiUrl || 'http://localhost:8000'
+).replace(/\/+$/, '')
 
 /** Kept identical to the backend upload cap (25 MB). */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024

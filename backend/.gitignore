@@ -3,7 +3,18 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+.env.*
+!.env.example
 .pytest_cache/
 .idea/
 .vscode/
-models/*.pt
+*.log
+# --- Model checkpoints: deliberately NOT ignored ---
+# `inference/model_loader.py` resolves
+#   <backend>/models/EfficientNetB0_CFP_final.pth
+#   <backend>/models/EfficientNetB0_UWF_final.pt
+# from `__file__`, so a Render build of `rootDir: backend` finds them only if they
+# are committed. Do NOT add `*.pt`, `*.pth` or `models/` to this file: without the
+# weights /predict and /gradcam answer 503 model_unavailable on every fresh clone.
+# The root .gitignore ignores `backend/models/*` and re-includes exactly these two
+# files (and models/.gitkeep); everything else in that directory stays ignored.

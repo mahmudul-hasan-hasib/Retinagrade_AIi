@@ -60,6 +60,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -124,6 +125,36 @@ LOCALHOST_ORIGINS: List[str] = [
 ]
 LOCALHOST_ORIGIN_REGEX = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 
+#: Deployment-only knob. ``CORS_ORIGINS`` is a comma-separated list of extra
+#: browser origins allowed to call this API, on top of the localhost defaults
+#: above. It exists because the localhost list cannot express a deployed
+#: frontend: a static site served from ``https://<site>.onrender.com`` is not a
+#: localhost origin, so the browser would block every ``/predict`` and
+#: ``/gradcam`` call as a cross-origin request.
+#:
+#: Nothing changes when the variable is unset or empty - the allow-list is
+#: exactly the localhost list, which is what local development already relies on.
+#: Origins are compared as browser-sent strings, so include the scheme and omit
+#: any trailing slash:
+#:
+#:     CORS_ORIGINS=https://my-frontend.onrender.com,https://my-frontend.pages.dev
+#:
+#: Only origins, never credentials: they are matched literally by the browser.
+def _extra_cors_origins() -> List[str]:
+    raw = (os.environ.get("CORS_ORIGINS") or "").strip()
+    if not raw:
+        return []
+    origins = []
+    for candidate in raw.split(","):
+        origin = candidate.strip().rstrip("/")
+        if origin:
+            origins.append(origin)
+    return origins
+
+
+EXTRA_CORS_ORIGINS: List[str] = _extra_cors_origins()
+ALLOWED_ORIGINS: List[str] = LOCALHOST_ORIGINS + EXTRA_CORS_ORIGINS
+
 app = FastAPI(
     title=f"{APP_NAME} API",
     version=API_VERSION,
@@ -137,7 +168,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=LOCALHOST_ORIGINS,
+    allow_origins=ALLOWED_ORIGINS,
     allow_origin_regex=LOCALHOST_ORIGIN_REGEX if ALLOW_LOCALHOST_ANY_PORT else None,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
